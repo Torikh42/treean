@@ -1,0 +1,45 @@
+{
+  "name": "treean-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src",
+    "test": "vitest run",
+    "openapi:generate": "openapi-ts -f openapi-ts.config.ts"
+  },
+  "dependencies": {
+    "@fontsource-variable/space-grotesk": "^5.2.10",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tanstack/react-form": "^1.12.0",
+    "@tanstack/react-query": "^5.80.0",
+    "@tanstack/react-router": "^1.120.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "sonner": "^2.0.7",
+    "tailwindcss": "^4.1.0",
+    "zod": "^4.0.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "^0.98.1",
+    "@tailwindcss/vite": "^4.1.0",
+    "@tanstack/react-query-devtools": "^5.80.0",
+    "@tanstack/react-router-devtools": "^1.120.0",
+    "@tanstack/router-plugin": "^1.120.0",
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.5.0",
+    "happy-dom": "^17.4.0",
+    "oxlint": "^1.0.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4"
+  }
+}

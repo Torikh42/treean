@@ -1,0 +1,71 @@
+@import "tailwindcss";
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/700.css";
+
+@theme inline {
+  --font-sans: "Space Grotesk Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-canvas: #f6f3eb;
+  --color-surface: #ffffff;
+  --color-surface-muted: #ede8dc;
+  --color-ink: #111111;
+  --color-ink-muted: #3f3f46;
+  --color-signal: #ffe500;
+  --color-signal-hover: #f5d800;
+
+  --color-status-paid-bg: #dcfce7;
+  --color-status-paid-ink: #166534;
+  --color-status-wait-bg: #fef3c7;
+  --color-status-wait-ink: #92400e;
+  --color-status-dead-bg: #fee2e2;
+  --color-status-dead-ink: #991b1b;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--color-ink);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px var(--color-signal);
+  }
+}
+
+.brutal-shadow {
+  box-shadow: 4px 4px 0 #111111;
+}
+
+.brutal-shadow-sm {
+  box-shadow: 2px 2px 0 #111111;
+}
+
+.brutal-press {
+  box-shadow: 4px 4px 0 #111111;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    background-color 120ms ease;
+}
+
+.brutal-press:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0 #111111;
+}
+
+.brutal-press:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0 #111111;
+}

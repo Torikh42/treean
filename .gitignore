@@ -1,0 +1,12 @@
+bin/
+.env
+.env.*
+!.env.example
+coverage.out
+*.exe
+*.test
+.DS_Store
+frontend/node_modules/
+frontend/dist/
+frontend/.tanstack/
+frontend/*.tsbuildinfo

@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+bin/
+coverage.out
+docs/
+specs/
+frontend/
+*.exe
+*.test
