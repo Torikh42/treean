@@ -52,21 +52,21 @@ event-ticketing/
 
 ---
 
-## 3. Core Patterns Adapted from Reference Codebases
+## 3. Core Architecture & Reliability Patterns
 
-1. **Structured Domain Errors (adapted from `SERA_ACV_ServiceDoku/app/Exceptions/DomainException.php`):**
+1. **Structured Domain Errors:**
    Every business failure returns a predictable HTTP status plus machine-readable `error_code` (`QUOTA_EXHAUSTED`, `BUYER_LIMIT_EXCEEDED`, `ORDER_EXPIRED`, `PAYMENT_AMOUNT_MISMATCH`, `UNAUTHORIZED_WEBHOOK`, `INVALID_ORDER_STATE`).
-2. **Audit Logging Outside Transaction Boundaries (`SERA_ACV_ServiceDoku` & `SERA_ACV_ServiceOrder`):**
+2. **Audit Logging Outside Transaction Boundaries:**
    - `payment_webhooks` inserts occur outside the rollback boundary of business transactions so invalid signatures, amount mismatches, and late webhooks remain auditable.
    - `order_logs` records every state transition (`WAITING_PAYMENT`, `PAID`, `CANCELLED`, `EXPIRED`) alongside actor type (`buyer`, `webhook`, `scheduler`, `lazy-check`).
-3. **Locked State Re-Check & Exact Integer Amount Comparison (`SERA_ACV_ServiceDoku` & `RentSafe-ai`):**
+3. **Locked State Re-Check & Exact Integer Amount Comparison:**
    - Webhook validation enforces fail-closed secret presence, constant-time SHA-512 comparison (`hmac.Equal`), and exact integer `int64` IDR matching (`gross_amount == order.TotalAmountIDR`).
-   - Orders are locked with `SELECT ... FOR UPDATE` and state transitions are re-evaluated inside the transaction. Unlike `ACV ServiceDoku` ("PAID Always Wins" for non-quota inspection bookings), finite flash-sale ticketing enforces **Quota Safety First**: expired orders never issue tickets after quota has been released.
-4. **Atomic Multi-Item Reservation Without Invoice Lock Contention (`SERA_ACV_ServiceOrder` & `siera`):**
+   - Orders are locked with `SELECT ... FOR UPDATE` and state transitions are re-evaluated inside the transaction. Unlike non-quota booking flows ("PAID Always Wins"), finite flash-sale ticketing enforces **Quota Safety First**: expired orders never issue tickets after quota has been released.
+4. **Atomic Multi-Item Reservation Without Invoice Lock Contention:**
    - Multi-item checkout supports ordering e.g. `2 Reguler + 2 VIP` in one order (`orders` + `order_items`).
-   - Instead of `SELECT MAX(...) FOR UPDATE` (used in `StoreOrder::generateBookingNumber`), invoice numbering uses PostgreSQL `SEQUENCE` (`invoice_seq`) to avoid global lock contention under 200 simultaneous buyers.
+   - Instead of global `SELECT MAX(...) FOR UPDATE` contention, invoice numbering uses PostgreSQL `SEQUENCE` (`invoice_seq`) to stay lock-free under 200 simultaneous buyers.
    - Per-buyer concurrency uses `pg_advisory_xact_lock(hashtext(event_id), hashtext(buyer_id))` followed by sorted `ticket_types` locks (`ORDER BY id ASC FOR UPDATE`) to eliminate deadlocks.
-5. **Non-Blocking Batch Expiry Sweeper (`ExpiredDatePayment` upgraded with `SKIP LOCKED`):**
+5. **Non-Blocking Batch Expiry Sweeper (`SKIP LOCKED`):**
    - The background ticker selects expired pending orders in small batches (`ORDER BY id ASC FOR UPDATE SKIP LOCKED LIMIT 50`) so it never stalls active buyers or blocks on concurrent payment/cancel transactions.
 
 ---

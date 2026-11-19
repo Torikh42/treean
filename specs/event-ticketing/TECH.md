@@ -12,12 +12,12 @@
 
 This repository builds a standalone PostgreSQL-backed REST API in Go for high-concurrency limited-quota event ticketing. User-visible behavior, state transitions, and invariants `B1` through `B10` are defined in [`PRODUCT.md`](./PRODUCT.md).
 
-Design patterns adapt proven mechanics inspected across the user's prior codebases:
-- Explicit lock ordering (`ORDER BY id ASC FOR UPDATE`) and batch background expiry cleanup (`siera` merch checkout and expiry sweeper).
-- SHA-512 webhook signature verification and per-transaction audit logging (`RentSafe-ai` Midtrans webhook handler).
-- Fail-closed webhook authentication, audit logs persisted outside rollback boundaries, status transition `order_logs`, and machine-readable domain error codes (`SERA_ACV_ServiceDoku` and `SERA_ACV_ServiceOrder`).
+Key concurrency and reliability patterns designed into the system:
+- Explicit ascending lock ordering (`ORDER BY id ASC FOR UPDATE`) and batch background expiry cleanup (`SKIP LOCKED`).
+- Constant-time SHA-512 webhook signature verification and per-transaction audit logging.
+- Fail-closed webhook authentication, audit logs persisted outside rollback boundaries, status transition `order_logs`, and machine-readable domain error codes.
 
-Unlike `SERA_ACV_ServiceDoku`'s *"PAID Always Wins"* policy (appropriate for non-quota vehicle inspections), limited-quota ticketing enforces **Quota Safety First**: expired orders release their reservation and never issue tickets on late payment capture.
+Unlike non-quota systems that apply a *"PAID Always Wins"* policy, limited-quota ticketing enforces **Quota Safety First**: expired orders release their reservation and never issue tickets on late payment capture.
 
 ---
 

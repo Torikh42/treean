@@ -29,5 +29,5 @@
 1. **Zero decorative slop:** No gradients, no `backdrop-filter` blur, no emoji in headings/buttons, no eyebrow pills above H1, no decorative status dots (`R-01`, `R-04`, `R-09`, `R-10`, `R-31`). Live status dots appear ONLY on `/health` when reflecting actual API ping state.
 2. **Real Behavior Only (`R-24`, `R-26`):** Every navigation item routes cleanly via TanStack Router; every button triggers an actual OpenAPI-backed mutation or navigation.
 3. **Explicit States (`R-27`):** Loading states name what is loading; empty states offer the exact next action (e.g. create an event or place an order); errors surface backend `error_code` + `detail` + recovery steps.
-4. **Strict Component Separation (`web-siera` AGENTS.md):** All logic, forms, intervals, and API state reside in `src/hooks/` and TanStack Query; `src/components/` remain pure JSX presentational views.
+4. **Strict Component Separation:** All logic, forms, intervals, and API state reside in `src/hooks/` and TanStack Query; `src/components/` remain pure JSX presentational views.
 5. **Accessibility (`R-03`, `R-34`):** Minimum `44px` interactive height, high-contrast `3px solid #111111` + `#FFE500` `:focus-visible` outline, mobile-first reflow down to `375px` with zero horizontal overflow.

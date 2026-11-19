@@ -1,6 +1,6 @@
 # Architecture Decision Records (DECISIONS.md)
 
-Dokumen ini mencatat keputusan arsitektur utama, kompromi (*trade-off*), dan perbandingan dengan pola produksi dari referensi proyek (`IBID/ACV`, `RentSafe-ai`, `siera`, `dignition`) untuk proyek **Treean (`github.com/Torikh42/treean`)**.
+Dokumen ini mencatat keputusan arsitektur utama dan kompromi (*trade-off*) untuk proyek **Treean (`github.com/Torikh42/treean`)**.
 
 ---
 
@@ -13,8 +13,8 @@ Dokumen ini mencatat keputusan arsitektur utama, kompromi (*trade-off*), dan per
 | ADR-003 | Pencegahan Oversell & Deadlock | PostgreSQL Pessimistic Lock (`FOR UPDATE` terurut `ASC`) + `CHECK` Constraints | Optimistic Locking (`version`), Atomic Update tanpa lock multi-item |
 | ADR-004 | Batas Maks 4 Tiket/Pembeli/Acara | `pg_advisory_xact_lock(hashtext(event), hashtext(buyer))` | `SELECT SUM()` biasa, atau `SERIALIZABLE` penuh seluruh tabel |
 | ADR-005 | Auto-Expire 15 Menit | Hybrid: Background Ticker (`FOR UPDATE SKIP LOCKED`) + Partial-Index Lazy Check | Ticker periodik saja, atau Redis + Delayed Queue |
-| ADR-006 | Webhook Idempotency & Late Payment | `payment_webhooks` log di luar tx + `orders FOR UPDATE` + **Quota Safety First** | Pola `ACV` ("PAID Always Wins"), atau in-memory idempotency cache |
-| ADR-007 | Penomoran Invoice & Tiket | PostgreSQL `SEQUENCE` (`invoice_seq`) + `crypto/rand` + `UNIQUE(order_item_id, seat_sequence)` | `SELECT MAX(...) FOR UPDATE` (`SERA_ACV_ServiceOrder` StoreOrder) |
+| ADR-006 | Webhook Idempotency & Late Payment | `payment_webhooks` log di luar tx + `orders FOR UPDATE` + **Quota Safety First** | Pola "PAID Always Wins", atau in-memory idempotency cache |
+| ADR-007 | Penomoran Invoice & Tiket | PostgreSQL `SEQUENCE` (`invoice_seq`) + `crypto/rand` + `UNIQUE(order_item_id, seat_sequence)` | `SELECT MAX(...) FOR UPDATE` pada tabel `orders` |
 | ADR-008 | Identitas Demo & Uji Konkurensi | Hybrid JWT Bearer + Opt-in Demo Headers (`ALLOW_DEMO_HEADER_AUTH`) | Strict JWT saja untuk skenario benchmark lokal |
 
 ---
@@ -78,12 +78,12 @@ Dokumen ini mencatat keputusan arsitektur utama, kompromi (*trade-off*), dan per
 ## ADR-006: Idempotency Webhook & Kebijakan Late Payment ("Quota Safety First" vs "PAID Always Wins")
 
 - **Konteks:** Webhook pembayaran bisa terkirim ganda secara paralel, memiliki nominal tidak cocok, memiliki signature tidak valid, atau datang **setelah** pesanan melewati batas 15 menit (`EXPIRED`).
-- **Perbandingan dengan Pola Referensi `IBID/ACV` (`SERA_ACV_ServiceDoku`):**
-  Pada modul `SERA_ACV_ServiceDoku` (rencana `IVI-4467`), aturan bisnisnya adalah **"PAID Always Wins"**: jika webhook `payment.capture` datang setelah tagihan berstatus `EXPIRED`, transaksi tetap dipromosikan menjadi `PAID` karena layanan inspeksi mobil tidak memiliki kuota kursi fisik yang sudah terlanjur terjual ke pelanggan lain.
+- **Alternatif Kebijakan ("PAID Always Wins") vs "Quota Safety First":**
+  Pada sistem tanpa kuota terbatas (misalnya booking jasa non-kapasitas), webhook `payment.capture` yang terlambat datang setelah tagihan `EXPIRED` kadang tetap dipromosikan menjadi `PAID`.
 - **Keputusan di Treean ("Quota Safety First"):**
   Untuk penjualan tiket berkuota terbatas, begitu order melewati 15 menit (`EXPIRED`), kuotanya sudah kembali ke pool dan mungkin sudah dibeli pengguna lain. Memaksa promosi ke `PAID` setelah `EXPIRED` akan menyebabkan **oversell**. Oleh karena itu:
-  1. **Validasi Keamanan Fail-Closed (`ACV Amendment G3`):** Header/field signature `SHA-512(order_id + status_code + gross_amount + secret)` wajib diverifikasi dalam waktu konstan (`hmac.Equal`). Jika secret konfigurasi kosong, semua webhook ditolak (`401 UNAUTHORIZED_WEBHOOK`).
-  2. **Audit Log Di Luar Transaksi Utama (`ACV XenditLogModel`):** Payload webhook langsung dicatat ke tabel `payment_webhooks` di luar transaksi rollback bisnis. Jadi meskipun signature gagal, `gross_amount` salah (`400 PAYMENT_AMOUNT_MISMATCH`), atau webhook ditolak karena `EXPIRED`, bukti auditnya tetap tersimpan.
+  1. **Validasi Keamanan Fail-Closed:** Header/field signature `SHA-512(order_id + status_code + gross_amount + secret)` wajib diverifikasi dalam waktu konstan (`hmac.Equal`). Jika secret konfigurasi kosong, semua webhook ditolak (`401 UNAUTHORIZED_WEBHOOK`).
+  2. **Audit Log Di Luar Transaksi Utama:** Payload webhook langsung dicatat ke tabel `payment_webhooks` di luar transaksi rollback bisnis. Jadi meskipun signature gagal, `gross_amount` salah (`400 PAYMENT_AMOUNT_MISMATCH`), atau webhook ditolak karena `EXPIRED`, bukti auditnya tetap tersimpan.
   3. **Idempotency Replay:** Ketika order sudah `PAID`, webhook capture yang masuk ulang (termasuk 10 request bersamaan) akan mengantre pada `SELECT ... FOR UPDATE` di baris `orders`, melihat status `PAID`, tidak menerbitkan tiket lagi (`UNIQUE(order_item_id, seat_sequence)` menjadi lapisan pengaman kedua), mencatat outcome `IGNORED_DUPLICATE`, dan menjawab `200 OK` beserta daftar tiket yang sudah ada.
   4. **Late Capture Setelah Expired:** Jika `status == EXPIRED`, `CANCELLED`, atau `now > expires_at`, transaksi memastikan status tercatat `EXPIRED` (dan kuota kembali jika baru terdeteksi terlambat), menolak penerbitan tiket dengan `409 ORDER_EXPIRED`, dan menandai baris `payment_webhooks` dengan `outcome = REJECTED_LATE_EXPIRED` serta `requires_refund = true`.
 - **Trade-Off:** Penyelenggara atau tim keuangan perlu menindaklanjuti flag `requires_refund = true` jika uang pengguna terlanjur terpotong oleh penyedia pembayaran pada detik ke-901, alih-alih menerbitkan tiket yang melampaui kapasitas venue.
@@ -92,7 +92,7 @@ Dokumen ini mencatat keputusan arsitektur utama, kompromi (*trade-off*), dan per
 
 ## ADR-007: Penomoran Invoice Memakai PostgreSQL `SEQUENCE` dan Kode Tiket `crypto/rand`
 
-- **Konteks:** Di `SERA_ACV_ServiceOrder/app/Actions/V4/Orders/StoreOrder.php`, penomoran `BookingNumber` memakai query `ORDER BY OrderId DESC` dengan `lockForUpdate()`.
+- **Konteks:** Penomoran invoice memakai query `ORDER BY id DESC` dengan `FOR UPDATE` dapat menjadi bottleneck global di bawah tekanan checkout paralel.
 - **Keputusan:** Mengganti pola `ORDER BY DESC FOR UPDATE` dengan PostgreSQL sequence (`nextval('invoice_seq')`) untuk `invoice_number` (`INV-YYYY-000001`), dan menggunakan `crypto/rand` hex/alphanumeric token untuk `tickets.ticket_code` (`TKT-XXXXXXXX`).
 - **Alasan & Trade-Off:** Pada 200 concurrent checkout, mengunci baris order terbaru via `FOR UPDATE` memaksa semua 200 transaksi saling tunggu meskipun memesan event yang berbeda. Sequence bekerja di luar MVCC lock transaksi, dan kode tiket acak `crypto/rand` mencegah penebakan kode tiket milik pembeli lain. Konsekuensinya, jika sebuah transaksi `ROLLBACK`, nomor urut `invoice_seq` bisa meloncat (ada celah angka), yang sepenuhnya normal dalam sistem akuntansi modern dan tidak memengaruhi keunikan invoice.
 
