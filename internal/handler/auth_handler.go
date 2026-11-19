@@ -36,6 +36,11 @@ type LoginOutput struct {
 	Body *service.AuthResult
 }
 
+// MeOutput wraps the authenticated user profile response payload.
+type MeOutput struct {
+	Body *domain.User
+}
+
 func registerAuthRoutes(api huma.API, logger *slog.Logger, authSvc *service.AuthService) {
 	huma.Register(api, huma.Operation{
 		OperationID:   "register-user",
@@ -69,5 +74,24 @@ func registerAuthRoutes(api huma.API, logger *slog.Logger, authSvc *service.Auth
 			return nil, mapServiceError(ctx, logger, err)
 		}
 		return &LoginOutput{Body: res}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-me",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/auth/me",
+		Summary:     "Get authenticated user profile",
+		Tags:        []string{authTag},
+		Security:    bearerSecurity,
+	}, func(ctx context.Context, _ *struct{}) (*MeOutput, error) {
+		actor, err := requireActor(ctx)
+		if err != nil {
+			return nil, mapServiceError(ctx, logger, err)
+		}
+		user, err := authSvc.GetProfile(ctx, actor.ID)
+		if err != nil {
+			return nil, mapServiceError(ctx, logger, err)
+		}
+		return &MeOutput{Body: user}, nil
 	})
 }

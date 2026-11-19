@@ -1,7 +1,9 @@
+import type { ReactNode } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, Link, Outlet } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 import { AppShell } from "@/components/layout/AppShell";
+import { useSessionSync } from "@/hooks/useSessionSync";
 import { TanStackQueryProvider } from "@/integrations/tanstack-query/root-provider";
 import "../index.css";
 
@@ -14,12 +16,17 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   notFoundComponent: NotFoundView,
 });
 
+function SessionShell({ children }: { children: ReactNode }) {
+  useSessionSync();
+  return <AppShell>{children}</AppShell>;
+}
+
 function RootLayout() {
   return (
     <TanStackQueryProvider>
-      <AppShell>
+      <SessionShell>
         <Outlet />
-      </AppShell>
+      </SessionShell>
       <Toaster
         position="bottom-right"
         toastOptions={{

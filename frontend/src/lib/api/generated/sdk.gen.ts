@@ -2,8 +2,8 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { CancelOrderData, CancelOrderErrors, CancelOrderResponses, CreateEventData, CreateEventErrors, CreateEventResponses, CreateOrderData, CreateOrderErrors, CreateOrderResponses, DemoFlashSaleData, DemoFlashSaleErrors, DemoFlashSaleResponses, GetEventData, GetEventErrors, GetEventResponses, GetOrderData, GetOrderErrors, GetOrderResponses, ListEventsData, ListEventsErrors, ListEventsResponses, ListMyOrdersData, ListMyOrdersErrors, ListMyOrdersResponses, LoginUserData, LoginUserErrors, LoginUserResponses, PaymentWebhookData, PaymentWebhookErrors, PaymentWebhookResponses, PayOrderDemoData, PayOrderDemoErrors, PayOrderDemoResponses, RegisterUserData, RegisterUserErrors, RegisterUserResponses } from './types.gen';
-import { zCancelOrderResponse, zCreateEventResponse, zCreateOrderResponse, zDemoFlashSaleResponse, zGetEventResponse, zGetOrderResponse, zListEventsResponse, zListMyOrdersResponse, zLoginUserResponse, zPaymentWebhookResponse, zPayOrderDemoResponse, zRegisterUserResponse } from './zod.gen';
+import type { CancelOrderData, CancelOrderErrors, CancelOrderResponses, CreateEventData, CreateEventErrors, CreateEventResponses, CreateOrderData, CreateOrderErrors, CreateOrderResponses, DeleteEventData, DeleteEventErrors, DeleteEventResponses, DemoFlashSaleData, DemoFlashSaleErrors, DemoFlashSaleResponses, GetEventData, GetEventErrors, GetEventResponses, GetMeData, GetMeErrors, GetMeResponses, GetOrderData, GetOrderErrors, GetOrderResponses, ListEventsData, ListEventsErrors, ListEventsResponses, ListMyOrdersData, ListMyOrdersErrors, ListMyOrdersResponses, ListOrganizerEventsData, ListOrganizerEventsErrors, ListOrganizerEventsResponses, LoginUserData, LoginUserErrors, LoginUserResponses, PaymentWebhookData, PaymentWebhookErrors, PaymentWebhookResponses, PayOrderDemoData, PayOrderDemoErrors, PayOrderDemoResponses, RegisterUserData, RegisterUserErrors, RegisterUserResponses, UpdateEventData, UpdateEventErrors, UpdateEventResponses } from './types.gen';
+import { zCancelOrderResponse, zCreateEventResponse, zCreateOrderResponse, zDeleteEventResponse, zDemoFlashSaleResponse, zGetEventResponse, zGetMeResponse, zGetOrderResponse, zListEventsResponse, zListMyOrdersResponse, zListOrganizerEventsResponse, zLoginUserResponse, zPaymentWebhookResponse, zPayOrderDemoResponse, zRegisterUserResponse, zUpdateEventResponse } from './zod.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -30,6 +30,16 @@ export const loginUser = <ThrowOnError extends boolean = false>(options: Options
         'Content-Type': 'application/json',
         ...options.headers
     }
+});
+
+/**
+ * Get authenticated user profile
+ */
+export const getMe = <ThrowOnError extends boolean = false>(options?: Options<GetMeData, ThrowOnError>): RequestResult<GetMeResponses, GetMeErrors, ThrowOnError> => (options?.client ?? client).get<GetMeResponses, GetMeErrors, ThrowOnError>({
+    responseValidator: async (data) => await zGetMeResponse.parseAsync(data),
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/auth/me',
+    ...options
 });
 
 /**
@@ -82,12 +92,36 @@ export const createEvent = <ThrowOnError extends boolean = false>(options: Optio
 });
 
 /**
+ * Delete an unused event with no orders (Owner organizer only)
+ */
+export const deleteEvent = <ThrowOnError extends boolean = false>(options: Options<DeleteEventData, ThrowOnError>): RequestResult<DeleteEventResponses, DeleteEventErrors, ThrowOnError> => (options.client ?? client).delete<DeleteEventResponses, DeleteEventErrors, ThrowOnError>({
+    responseValidator: async (data) => await zDeleteEventResponse.parseAsync(data),
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/events/{id}',
+    ...options
+});
+
+/**
  * Get event details and live remaining quota per ticket tier
  */
 export const getEvent = <ThrowOnError extends boolean = false>(options: Options<GetEventData, ThrowOnError>): RequestResult<GetEventResponses, GetEventErrors, ThrowOnError> => (options.client ?? client).get<GetEventResponses, GetEventErrors, ThrowOnError>({
     responseValidator: async (data) => await zGetEventResponse.parseAsync(data),
     url: '/api/v1/events/{id}',
     ...options
+});
+
+/**
+ * Update an event and its ticket tiers (Owner organizer only)
+ */
+export const updateEvent = <ThrowOnError extends boolean = false>(options: Options<UpdateEventData, ThrowOnError>): RequestResult<UpdateEventResponses, UpdateEventErrors, ThrowOnError> => (options.client ?? client).put<UpdateEventResponses, UpdateEventErrors, ThrowOnError>({
+    responseValidator: async (data) => await zUpdateEventResponse.parseAsync(data),
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/events/{id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 /**
@@ -141,6 +175,16 @@ export const payOrderDemo = <ThrowOnError extends boolean = false>(options: Opti
     responseValidator: async (data) => await zPayOrderDemoResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/orders/{id}/pay',
+    ...options
+});
+
+/**
+ * List events owned by the authenticated organizer
+ */
+export const listOrganizerEvents = <ThrowOnError extends boolean = false>(options?: Options<ListOrganizerEventsData, ThrowOnError>): RequestResult<ListOrganizerEventsResponses, ListOrganizerEventsErrors, ThrowOnError> => (options?.client ?? client).get<ListOrganizerEventsResponses, ListOrganizerEventsErrors, ThrowOnError>({
+    responseValidator: async (data) => await zListOrganizerEventsResponse.parseAsync(data),
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/organizer/events',
     ...options
 });
 

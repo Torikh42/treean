@@ -6,7 +6,7 @@ Repository: `https://github.com/Torikh42/treean`
 
 ## Scope Note
 
-This monorepo pairs the Go backend REST API (`go1.26.2`) with a React + Vite + TanStack frontend (`frontend/`, styled per [`DESIGN.md`](DESIGN.md) in Signal Yellow Web-Brutalism). In Docker Compose, Nginx serves the frontend at `http://localhost:3000` and proxies `/api/*`, `/docs`, `/openapi.json`, `/health`, and `/schemas/*` to the Go API (`:8080`). Interactive Scalar docs live at `/docs` and `/openapi.json`, while `/demo` on the API serves a minimal landing stub linking to the docs and frontend.
+This monorepo pairs the Go backend REST API (`go1.26.2`) with a React + Vite + TanStack frontend (`frontend/`, styled per [`DESIGN.md`](DESIGN.md) in Signal Yellow Web-Brutalism). In Docker Compose, Nginx serves the frontend at `http://localhost:5173` and proxies `/api/*`, `/docs`, `/openapi.json`, `/health`, and `/schemas/*` to the Go API (`:8080`). Interactive Scalar docs live at `/docs` and `/openapi.json`, while `/demo` on the API serves a minimal landing stub linking to the docs and frontend.
 
 ## Key Capabilities & Invariants
 
@@ -58,7 +58,7 @@ On startup, the API connects to PostgreSQL, acquires an advisory lock, applies e
 
 Once running:
 
-- Web Console (React + Nginx): `http://localhost:3000` (or `http://localhost:5173` during `bun run dev`)
+- Web Console (React + Nginx / Vite dev): `http://localhost:5173`
 - Scalar API Docs: `http://localhost:8080/docs`
 - OpenAPI 3.1 JSON: `http://localhost:8080/openapi.json`
 - Health Check: `http://localhost:8080/health` (`200 {"status":"ok"}` when DB is reachable, `503 {"status":"unhealthy"}` otherwise)
@@ -80,14 +80,14 @@ make down
 | `DATABASE_URL` | Yes | - | `postgres://ticketing:ticketing_secret@localhost:5432/event_ticketing?sslmode=disable` | PostgreSQL DSN (Compose points `api` to `postgres:5432`) |
 | `JWT_SECRET` | Yes | - | `dev-jwt-secret-change-in-production` | HS256 signing secret for Bearer JWT tokens |
 | `WEBHOOK_SECRET` | Yes | - | `dev-webhook-secret-change-in-production` | Shared secret for SHA-512 webhook verification (blank secret fails closed) |
-| `ALLOW_DEMO_HEADER_AUTH` | No | `false` | `true` | Enables opt-in `X-User-ID` / `X-User-Role` demo headers; set `false` in production |
+| `ALLOW_DEMO_HEADER_AUTH` | No | `false` | `false` | Enables opt-in `X-User-ID` / `X-User-Role` demo headers when set `true`; web app uses Bearer JWT and `/flash-sale` works independently |
 | `EXPIRY_SWEEP_INTERVAL` | No | `5s` | `5s` | Background `ExpirySweeper` ticker interval |
 | `HTTP_READ_TIMEOUT` | No | `15s` | `15s` | HTTP server read timeout |
 | `HTTP_WRITE_TIMEOUT` | No | `30s` | `30s` | HTTP server write timeout |
 | `DB_MAX_CONNS` | No | `50` | `50` | `pgxpool` maximum connections |
 | `DB_MIN_CONNS` | No | `5` | `5` | `pgxpool` minimum warm connections |
-| `CORS_ALLOWED_ORIGINS` | No | `http://localhost:5173,...` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed browser origins (`*` allowed explicitly) |
-| `FRONTEND_PORT` | No | - | `3000` | Compose host port mapping for the Nginx frontend container |
+| `CORS_ALLOWED_ORIGINS` | No | `http://localhost:5173,...` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowed browser origins (`*` allowed explicitly) |
+| `FRONTEND_PORT` | No | - | `5173` | Compose host port mapping for the Nginx frontend container |
 
 `docker-compose.yml` also accepts optional `POSTGRES_USER` (`ticketing`), `POSTGRES_PASSWORD` (`ticketing_secret`), and `POSTGRES_DB` (`event_ticketing`).
 
@@ -113,8 +113,21 @@ Seeded event:
 
 Protected routes support two authentication mechanisms (`internal/middleware/auth.go`):
 
-1. **Bearer JWT (standard):** Call `POST /api/v1/auth/register` or `POST /api/v1/auth/login` and pass `Authorization: Bearer <access_token>`.
+1. **Bearer JWT (standard):** Call `POST /api/v1/auth/register` or `POST /api/v1/auth/login` and pass `Authorization: Bearer <access_token>`. Session reloads validate the persisted JWT via `GET /api/v1/auth/me`.
 2. **Local Demo Headers (opt-in):** When `ALLOW_DEMO_HEADER_AUTH=true`, pass both `X-User-ID: <uuid>` and `X-User-Role: ORGANIZER|BUYER`. Missing users are provisioned automatically via `EnsureDemoUser` so concurrent load tests can simulate hundreds of distinct buyers without pre-registering JWTs.
+
+## Web Console Routes & RBAC Guards (`frontend/`)
+
+| Route | Access / Guard | Description |
+| :--- | :--- | :--- |
+| `/` | Public | Live Event Box Office catalog with title/venue search and live tier quotas |
+| `/events/$eventId` | Public view / `BUYER` checkout | Event & tier quota breakdown; guests see `Sign In as Buyer to Reserve`, `ORGANIZER` accounts see a Buyer-only checkout notice |
+| `/flash-sale` | Public | 200-concurrent Flash Sale benchmark (`POST /api/v1/demo/flash-sale`) & SHA-512 Webhook Lab |
+| `/login` | Guest-only (`requireGuest`) | Email/password JWT sign-in with sanitized `redirect` support |
+| `/register` | Guest-only (`requireGuest`) | Create a `BUYER` or `ORGANIZER` account (`POST /api/v1/auth/register`) |
+| `/forbidden` | Public | Role mismatch notice (`403`) with contextual navigation |
+| `/orders`, `/orders/$orderId` | `BUYER` (`beforeLoad: requireRole("BUYER")`) | Buyer order history, 15-minute hold countdown, payment/cancel actions, and issued ticket codes |
+| `/organizer` | `ORGANIZER` (`beforeLoad: requireRole("ORGANIZER")`) | Organizer Event CRUD Console (owned events list, create, edit tiers/quotas, inline-confirmed delete) |
 
 ## API Endpoints
 
@@ -126,9 +139,13 @@ Protected routes support two authentication mechanisms (`internal/middleware/aut
 | `GET` | `/demo` | Public | Minimal HTML API landing stub |
 | `POST` | `/api/v1/auth/register` | Public | Register `ORGANIZER` or `BUYER` account and return JWT (`201`) |
 | `POST` | `/api/v1/auth/login` | Public | Authenticate email/password and return JWT (`200`) |
+| `GET` | `/api/v1/auth/me` | Authenticated | Return authenticated caller profile (`200`, or `401` if invalid/deleted) |
 | `POST` | `/api/v1/events` | `ORGANIZER` | Create event with 2 to 10 ticket tiers atomically (`201`) |
 | `GET` | `/api/v1/events` | Public | List events with live remaining quota after lazy expiry check (`200`) |
+| `GET` | `/api/v1/organizer/events` | `ORGANIZER` | List events owned by the authenticated organizer (`200`) |
 | `GET` | `/api/v1/events/{id}` | Public | Get event details and live tier quotas (`200`) |
+| `PUT` | `/api/v1/events/{id}` | Owner `ORGANIZER` | Update event metadata and upsert/validate ticket tiers atomically (`200`, `403`, `409`) |
+| `DELETE` | `/api/v1/events/{id}` | Owner `ORGANIZER` | Delete an unused event with no orders (`204`, `403`, `409 EVENT_HAS_ORDERS`) |
 | `POST` | `/api/v1/orders` | Authenticated | Reserve `1..4` tickets for 15 minutes in `WAITING_PAYMENT` (`201`) |
 | `GET` | `/api/v1/orders` | Authenticated | List caller's orders with items and issued tickets (`200`) |
 | `GET` | `/api/v1/orders/{id}` | Buyer / Event Organizer | Get order detail with items, status logs, and issued tickets (`200`) |

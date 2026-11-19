@@ -43,8 +43,17 @@ export function OrdersHistoryTable({
       {!enabled && (
         <StateNotice
           kind="empty"
-          title="No active buyer identity"
-          detail="Open the identity panel in the top right to sign in or select a demo buyer."
+          title="Buyer sign-in required"
+          detail="Sign in with a Buyer account to view order history and issued ticket codes."
+          action={
+            <Link
+              to="/login"
+              search={{ redirect: "/orders" }}
+              className="inline-flex min-h-[44px] items-center border-2 border-ink bg-signal px-4 py-2 text-sm font-bold brutal-press"
+            >
+              Sign In as Buyer
+            </Link>
+          }
         />
       )}
 

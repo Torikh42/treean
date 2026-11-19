@@ -19,13 +19,12 @@ export function configureApiClient(): void {
     const state = useAuthStore.getState();
     const headers = new Headers(request.headers);
 
-    if (state.authMode === "jwt" && state.accessToken) {
+    headers.delete("X-User-ID");
+    headers.delete("X-User-Role");
+
+    if (state.accessToken) {
       headers.set("Authorization", `Bearer ${state.accessToken}`);
-      headers.delete("X-User-ID");
-      headers.delete("X-User-Role");
-    } else if (state.authMode === "demo" && state.demoUserId.trim()) {
-      headers.set("X-User-ID", state.demoUserId.trim());
-      headers.set("X-User-Role", state.demoRole);
+    } else {
       headers.delete("Authorization");
     }
 

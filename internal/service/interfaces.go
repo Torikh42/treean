@@ -29,7 +29,10 @@ type UserRepository interface {
 type EventRepository interface {
 	CreateWithTiers(ctx context.Context, ev *domain.Event) error
 	ListAll(ctx context.Context) ([]domain.Event, error)
+	ListByOrganizer(ctx context.Context, organizerID uuid.UUID) ([]domain.Event, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.Event, error)
+	UpdateWithTiers(ctx context.Context, organizerID uuid.UUID, ev *domain.Event) error
+	DeleteUnused(ctx context.Context, organizerID, eventID uuid.UUID) error
 }
 
 // OrderRepository defines persistence operations required by OrderService, EventService, PaymentService, and ExpirySweeper.

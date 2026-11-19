@@ -14,6 +14,8 @@ function EventCheckoutPage() {
     <EventCheckoutPanel
       event={checkout.event}
       tiers={checkout.tiers}
+      authenticated={checkout.authenticated}
+      activeRole={checkout.activeRole}
       isLoading={checkout.isLoading}
       error={checkout.error}
       onRetry={() => void checkout.refetch()}

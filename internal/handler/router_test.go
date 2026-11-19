@@ -124,17 +124,21 @@ func (m *memUserRepo) EnsureDemoUser(_ context.Context, id uuid.UUID, role domai
 }
 
 type memEventRepo struct {
-	mu      sync.Mutex
-	events  map[uuid.UUID]*domain.Event
-	tiers   map[uuid.UUID]*domain.TicketType
-	listErr error
-	findErr error
+	mu             sync.Mutex
+	events         map[uuid.UUID]*domain.Event
+	tiers          map[uuid.UUID]*domain.TicketType
+	eventHasOrders map[uuid.UUID]bool
+	tierHasOrders  map[uuid.UUID]bool
+	listErr        error
+	findErr        error
 }
 
 func newMemEventRepo() *memEventRepo {
 	return &memEventRepo{
-		events: make(map[uuid.UUID]*domain.Event),
-		tiers:  make(map[uuid.UUID]*domain.TicketType),
+		events:         make(map[uuid.UUID]*domain.Event),
+		tiers:          make(map[uuid.UUID]*domain.TicketType),
+		eventHasOrders: make(map[uuid.UUID]bool),
+		tierHasOrders:  make(map[uuid.UUID]bool),
 	}
 }
 
@@ -167,6 +171,21 @@ func (m *memEventRepo) ListAll(_ context.Context) ([]domain.Event, error) {
 	return out, nil
 }
 
+func (m *memEventRepo) ListByOrganizer(_ context.Context, organizerID uuid.UUID) ([]domain.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	out := make([]domain.Event, 0)
+	for _, ev := range m.events {
+		if ev.OrganizerID == organizerID {
+			out = append(out, m.snapshotLocked(ev))
+		}
+	}
+	return out, nil
+}
+
 func (m *memEventRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -179,6 +198,131 @@ func (m *memEventRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Event,
 	}
 	snap := m.snapshotLocked(ev)
 	return &snap, nil
+}
+
+func (m *memEventRepo) UpdateWithTiers(_ context.Context, organizerID uuid.UUID, ev *domain.Event) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stored, ok := m.events[ev.ID]
+	if !ok {
+		return domain.NewDomainError(http.StatusNotFound, domain.ErrCodeEventNotFound, "event not found")
+	}
+	if stored.OrganizerID != organizerID {
+		return domain.NewDomainError(http.StatusForbidden, domain.ErrCodeForbidden, "cannot modify another organizer's event")
+	}
+
+	existing := m.existingTierMapLocked(stored.TicketTypes)
+	nextTiers, kept, err := buildMemUpdatedTiers(stored.ID, existing, ev.TicketTypes)
+	if err != nil {
+		return err
+	}
+	if err := m.ensureRemovedTiersUnusedLocked(existing, kept); err != nil {
+		return err
+	}
+	m.replaceTiersLocked(existing, kept, nextTiers)
+
+	stored.Title = ev.Title
+	stored.Description = ev.Description
+	stored.Venue = ev.Venue
+	stored.EventDate = ev.EventDate
+	stored.TicketTypes = nextTiers
+
+	snap := m.snapshotLocked(stored)
+	*ev = snap
+	return nil
+}
+
+func (m *memEventRepo) existingTierMapLocked(tiers []domain.TicketType) map[uuid.UUID]domain.TicketType {
+	existing := make(map[uuid.UUID]domain.TicketType, len(tiers))
+	for _, tt := range tiers {
+		if live, exists := m.tiers[tt.ID]; exists {
+			existing[tt.ID] = *live
+		} else {
+			existing[tt.ID] = tt
+		}
+	}
+	return existing
+}
+
+func buildMemUpdatedTiers(
+	eventID uuid.UUID,
+	existing map[uuid.UUID]domain.TicketType,
+	input []domain.TicketType,
+) ([]domain.TicketType, map[uuid.UUID]struct{}, error) {
+	kept := make(map[uuid.UUID]struct{}, len(input))
+	nextTiers := make([]domain.TicketType, len(input))
+	now := time.Now().UTC()
+	for i, tt := range input {
+		if tt.ID == uuid.Nil {
+			tt.ID = uuid.New()
+			tt.EventID = eventID
+			tt.RemainingQuota = tt.TotalQuota
+			tt.CreatedAt = now
+			nextTiers[i] = tt
+			continue
+		}
+		prev, exists := existing[tt.ID]
+		if !exists {
+			return nil, nil, domain.NewDomainError(http.StatusNotFound, domain.ErrCodeTicketTypeNotFound, "ticket type not found for event")
+		}
+		soldOrHeld := prev.TotalQuota - prev.RemainingQuota
+		if tt.TotalQuota < soldOrHeld {
+			return nil, nil, domain.NewDomainError(http.StatusConflict, domain.ErrCodeQuotaConflict, "total_quota below reserved or sold count")
+		}
+		tt.EventID = eventID
+		tt.RemainingQuota = tt.TotalQuota - soldOrHeld
+		tt.CreatedAt = prev.CreatedAt
+		nextTiers[i] = tt
+		kept[tt.ID] = struct{}{}
+	}
+	return nextTiers, kept, nil
+}
+
+func (m *memEventRepo) ensureRemovedTiersUnusedLocked(existing map[uuid.UUID]domain.TicketType, kept map[uuid.UUID]struct{}) error {
+	for id := range existing {
+		if _, isKept := kept[id]; !isKept && m.tierHasOrders[id] {
+			return domain.NewDomainError(http.StatusConflict, domain.ErrCodeTierHasOrders, "cannot remove ticket tier with existing orders")
+		}
+	}
+	return nil
+}
+
+func (m *memEventRepo) replaceTiersLocked(
+	existing map[uuid.UUID]domain.TicketType,
+	kept map[uuid.UUID]struct{},
+	nextTiers []domain.TicketType,
+) {
+	for id := range existing {
+		if _, isKept := kept[id]; !isKept {
+			delete(m.tiers, id)
+		}
+	}
+	for i := range nextTiers {
+		tt := nextTiers[i]
+		m.tiers[tt.ID] = &tt
+	}
+}
+
+func (m *memEventRepo) DeleteUnused(_ context.Context, organizerID, eventID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stored, ok := m.events[eventID]
+	if !ok {
+		return domain.NewDomainError(http.StatusNotFound, domain.ErrCodeEventNotFound, "event not found")
+	}
+	if stored.OrganizerID != organizerID {
+		return domain.NewDomainError(http.StatusForbidden, domain.ErrCodeForbidden, "cannot delete another organizer's event")
+	}
+	if m.eventHasOrders[eventID] {
+		return domain.NewDomainError(http.StatusConflict, domain.ErrCodeEventHasOrders, "cannot delete event with existing orders")
+	}
+	for _, tt := range stored.TicketTypes {
+		delete(m.tiers, tt.ID)
+	}
+	delete(m.events, eventID)
+	return nil
 }
 
 func (m *memEventRepo) snapshotLocked(ev *domain.Event) domain.Event {
@@ -230,7 +374,9 @@ func (m *memOrderRepo) CreateOrder(_ context.Context, eventID, buyerID uuid.UUID
 
 	for _, it := range items {
 		m.events.tiers[it.TicketTypeID].RemainingQuota -= it.Quantity
+		m.events.tierHasOrders[it.TicketTypeID] = true
 	}
+	m.events.eventHasOrders[eventID] = true
 
 	orderID := uuid.New()
 	for i := range orderItems {
@@ -656,8 +802,10 @@ func TestRouter_DocsDemoAndOpenAPI(t *testing.T) {
 	expectedPaths := []string{
 		"/api/v1/auth/register",
 		"/api/v1/auth/login",
+		"/api/v1/auth/me",
 		"/api/v1/events",
 		"/api/v1/events/{id}",
+		"/api/v1/organizer/events",
 		"/api/v1/orders",
 		"/api/v1/orders/{id}",
 		"/api/v1/orders/{id}/cancel",
@@ -668,6 +816,15 @@ func TestRouter_DocsDemoAndOpenAPI(t *testing.T) {
 	for _, p := range expectedPaths {
 		if _, ok := spec.Paths[p]; !ok {
 			t.Fatalf("openapi.json missing path %s", p)
+		}
+	}
+	eventItemOps, ok := spec.Paths["/api/v1/events/{id}"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map for /api/v1/events/{id}, got %T", spec.Paths["/api/v1/events/{id}"])
+	}
+	for _, method := range []string{"get", "put", "delete"} {
+		if _, hasMethod := eventItemOps[method]; !hasMethod {
+			t.Fatalf("openapi.json missing %s on /api/v1/events/{id}", method)
 		}
 	}
 }
@@ -749,6 +906,150 @@ func TestRouter_AuthAndEventsFlow(t *testing.T) {
 	assertAPIError(t, doJSONReq(t, h.router, http.MethodGet, "/api/v1/events/not-a-uuid", nil), http.StatusBadRequest, domain.ErrCodeValidation)
 	assertAPIError(t, doJSONReq(t, h.router, http.MethodGet, "/api/v1/events/"+uuid.Nil.String(), nil), http.StatusBadRequest, domain.ErrCodeValidation)
 	assertAPIError(t, doJSONReq(t, h.router, http.MethodGet, "/api/v1/events/"+uuid.New().String(), nil), http.StatusNotFound, domain.ErrCodeEventNotFound)
+}
+
+func TestRouter_AuthMe(t *testing.T) {
+	t.Parallel()
+
+	h := newTestHarness(false)
+	buyer := registerTestUser(t, h.router, "buyer-me@event.local", "Buyer Me", "BUYER")
+
+	assertAPIError(t, doJSONReq(t, h.router, http.MethodGet, "/api/v1/auth/me", nil), http.StatusUnauthorized, domain.ErrCodeUnauthorized)
+	meRec := doJSONReq(t, h.router, http.MethodGet, "/api/v1/auth/me", nil, [2]string{"Authorization", "Bearer " + buyer.AccessToken})
+	if meRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/auth/me status = %d, want 200 (body=%s)", meRec.Code, meRec.Body.String())
+	}
+	if strings.Contains(meRec.Body.String(), "password_hash") {
+		t.Fatalf("GET /api/v1/auth/me leaked password_hash: %s", meRec.Body.String())
+	}
+	var me domain.User
+	if err := json.Unmarshal(meRec.Body.Bytes(), &me); err != nil || me.ID != buyer.User.ID || me.Role != domain.RoleBuyer {
+		t.Fatalf("unexpected /auth/me user: %+v (err=%v)", me, err)
+	}
+}
+
+func TestRouter_OrganizerEventsList(t *testing.T) {
+	t.Parallel()
+
+	h := newTestHarness(false)
+	org1 := registerTestUser(t, h.router, "org1-list@event.local", "Org One", "ORGANIZER")
+	org2 := registerTestUser(t, h.router, "org2-list@event.local", "Org Two", "ORGANIZER")
+	buyer := registerTestUser(t, h.router, "buyer-list@event.local", "Buyer One", "BUYER")
+
+	ev1 := createTestEvent(t, h.router, org1.AccessToken)
+	_ = createTestEvent(t, h.router, org2.AccessToken)
+
+	assertAPIError(t, doJSONReq(t, h.router, http.MethodGet, "/api/v1/organizer/events", nil, [2]string{"Authorization", "Bearer " + buyer.AccessToken}), http.StatusForbidden, domain.ErrCodeForbidden)
+	orgListRec := doJSONReq(t, h.router, http.MethodGet, "/api/v1/organizer/events", nil, [2]string{"Authorization", "Bearer " + org1.AccessToken})
+	if orgListRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/organizer/events status = %d, want 200 (body=%s)", orgListRec.Code, orgListRec.Body.String())
+	}
+	var orgEvents []domain.Event
+	if err := json.Unmarshal(orgListRec.Body.Bytes(), &orgEvents); err != nil || len(orgEvents) != 1 || orgEvents[0].ID != ev1.ID {
+		t.Fatalf("GET /api/v1/organizer/events = %+v (err=%v), want only ev1", orgEvents, err)
+	}
+}
+
+func TestRouter_UpdateEvent(t *testing.T) {
+	t.Parallel()
+
+	h := newTestHarness(false)
+	org1 := registerTestUser(t, h.router, "org1-upd@event.local", "Org One", "ORGANIZER")
+	org2 := registerTestUser(t, h.router, "org2-upd@event.local", "Org Two", "ORGANIZER")
+	buyer := registerTestUser(t, h.router, "buyer-upd@event.local", "Buyer One", "BUYER")
+
+	ev1 := createTestEvent(t, h.router, org1.AccessToken)
+	regID := ev1.TicketTypes[0].ID
+	vipID := ev1.TicketTypes[1].ID
+	_ = createTestOrder(t, h.router, buyer.AccessToken, ev1.ID, regID, 2)
+
+	future := time.Now().UTC().Add(96 * time.Hour).Format(time.RFC3339)
+
+	t.Run("authorization and not found guards", func(t *testing.T) {
+		body := map[string]any{
+			"title": "Blocked Edit", "venue": "Hall", "event_date": future,
+			"ticket_types": []map[string]any{
+				{"id": regID.String(), "name": "Reguler", "price_idr": 150000, "total_quota": 50},
+				{"id": vipID.String(), "name": "VIP", "price_idr": 350000, "total_quota": 10},
+			},
+		}
+		assertAPIError(t, doJSONReq(t, h.router, http.MethodPut, "/api/v1/events/"+ev1.ID.String(), body, [2]string{"Authorization", "Bearer " + buyer.AccessToken}), http.StatusForbidden, domain.ErrCodeForbidden)
+		assertAPIError(t, doJSONReq(t, h.router, http.MethodPut, "/api/v1/events/"+ev1.ID.String(), body, [2]string{"Authorization", "Bearer " + org2.AccessToken}), http.StatusForbidden, domain.ErrCodeForbidden)
+
+		missingBody := map[string]any{
+			"title": "Missing Event", "venue": "Hall", "event_date": future,
+			"ticket_types": []map[string]any{
+				{"name": "Reguler", "price_idr": 150000, "total_quota": 50},
+				{"name": "VIP", "price_idr": 350000, "total_quota": 10},
+			},
+		}
+		assertAPIError(t, doJSONReq(t, h.router, http.MethodPut, "/api/v1/events/"+uuid.New().String(), missingBody, [2]string{"Authorization", "Bearer " + org1.AccessToken}), http.StatusNotFound, domain.ErrCodeEventNotFound)
+	})
+
+	t.Run("quota conflict and ordered tier removal guards", func(t *testing.T) {
+		assertAPIError(t, doJSONReq(t, h.router, http.MethodPut, "/api/v1/events/"+ev1.ID.String(), map[string]any{
+			"title": "Shrink Quota", "venue": "Hall", "event_date": future,
+			"ticket_types": []map[string]any{
+				{"id": regID.String(), "name": "Reguler", "price_idr": 150000, "total_quota": 1},
+				{"id": vipID.String(), "name": "VIP", "price_idr": 350000, "total_quota": 10},
+			},
+		}, [2]string{"Authorization", "Bearer " + org1.AccessToken}), http.StatusConflict, domain.ErrCodeQuotaConflict)
+
+		assertAPIError(t, doJSONReq(t, h.router, http.MethodPut, "/api/v1/events/"+ev1.ID.String(), map[string]any{
+			"title": "Drop Ordered Tier", "venue": "Hall", "event_date": future,
+			"ticket_types": []map[string]any{
+				{"id": vipID.String(), "name": "VIP", "price_idr": 350000, "total_quota": 10},
+				{"name": "VVIP", "price_idr": 500000, "total_quota": 5},
+			},
+		}, [2]string{"Authorization", "Bearer " + org1.AccessToken}), http.StatusConflict, domain.ErrCodeTierHasOrders)
+	})
+
+	t.Run("owner updates metadata and tiers", func(t *testing.T) {
+		updRec := doJSONReq(t, h.router, http.MethodPut, "/api/v1/events/"+ev1.ID.String(), map[string]any{
+			"title": "Go Concurrency Conf 2.0", "description": "Updated desc", "venue": "ICE BSD", "event_date": future,
+			"ticket_types": []map[string]any{
+				{"id": regID.String(), "name": "Reguler", "price_idr": 175000, "total_quota": 60},
+				{"name": "VVIP", "price_idr": 550000, "total_quota": 15},
+			},
+		}, [2]string{"Authorization", "Bearer " + org1.AccessToken})
+		if updRec.Code != http.StatusOK {
+			t.Fatalf("PUT /api/v1/events/{id} status = %d, want 200 (body=%s)", updRec.Code, updRec.Body.String())
+		}
+		var updatedEv domain.Event
+		if err := json.Unmarshal(updRec.Body.Bytes(), &updatedEv); err != nil {
+			t.Fatalf("decode updated event: %v", err)
+		}
+		if updatedEv.Title != "Go Concurrency Conf 2.0" || len(updatedEv.TicketTypes) != 2 {
+			t.Fatalf("unexpected updated event header: %+v", updatedEv)
+		}
+		if updatedEv.TicketTypes[0].RemainingQuota != 58 || updatedEv.TicketTypes[1].RemainingQuota != 15 {
+			t.Fatalf("unexpected updated tier quotas: %+v", updatedEv.TicketTypes)
+		}
+	})
+}
+
+func TestRouter_DeleteEvent(t *testing.T) {
+	t.Parallel()
+
+	h := newTestHarness(false)
+	org1 := registerTestUser(t, h.router, "org1-del@event.local", "Org One", "ORGANIZER")
+	org2 := registerTestUser(t, h.router, "org2-del@event.local", "Org Two", "ORGANIZER")
+	buyer := registerTestUser(t, h.router, "buyer-del@event.local", "Buyer One", "BUYER")
+
+	usedEv := createTestEvent(t, h.router, org1.AccessToken)
+	_ = createTestOrder(t, h.router, buyer.AccessToken, usedEv.ID, usedEv.TicketTypes[0].ID, 1)
+
+	assertAPIError(t, doJSONReq(t, h.router, http.MethodDelete, "/api/v1/events/"+usedEv.ID.String(), nil, [2]string{"Authorization", "Bearer " + buyer.AccessToken}), http.StatusForbidden, domain.ErrCodeForbidden)
+	assertAPIError(t, doJSONReq(t, h.router, http.MethodDelete, "/api/v1/events/"+usedEv.ID.String(), nil, [2]string{"Authorization", "Bearer " + org2.AccessToken}), http.StatusForbidden, domain.ErrCodeForbidden)
+	assertAPIError(t, doJSONReq(t, h.router, http.MethodDelete, "/api/v1/events/"+uuid.New().String(), nil, [2]string{"Authorization", "Bearer " + org1.AccessToken}), http.StatusNotFound, domain.ErrCodeEventNotFound)
+	assertAPIError(t, doJSONReq(t, h.router, http.MethodDelete, "/api/v1/events/"+usedEv.ID.String(), nil, [2]string{"Authorization", "Bearer " + org1.AccessToken}), http.StatusConflict, domain.ErrCodeEventHasOrders)
+
+	unusedEv := createTestEvent(t, h.router, org1.AccessToken)
+	delRec := doJSONReq(t, h.router, http.MethodDelete, "/api/v1/events/"+unusedEv.ID.String(), nil, [2]string{"Authorization", "Bearer " + org1.AccessToken})
+	if delRec.Code != http.StatusNoContent || delRec.Body.Len() != 0 {
+		t.Fatalf("DELETE unused event = (%d, %q), want 204 empty body", delRec.Code, delRec.Body.String())
+	}
+	assertAPIError(t, doJSONReq(t, h.router, http.MethodGet, "/api/v1/events/"+unusedEv.ID.String(), nil), http.StatusNotFound, domain.ErrCodeEventNotFound)
 }
 
 func TestRouter_OrdersFlow(t *testing.T) {
@@ -1122,8 +1423,8 @@ func TestRouter_CORS(t *testing.T) {
 		if got := optRec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
 			t.Fatalf("Access-Control-Allow-Origin = %q, want http://localhost:5173", got)
 		}
-		if got := optRec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, OPTIONS" {
-			t.Fatalf("Access-Control-Allow-Methods = %q, want GET, POST, OPTIONS", got)
+		if got := optRec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, DELETE, OPTIONS" {
+			t.Fatalf("Access-Control-Allow-Methods = %q, want GET, POST, PUT, DELETE, OPTIONS", got)
 		}
 		if got := optRec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role" {
 			t.Fatalf("Access-Control-Allow-Headers = %q, want Content-Type, Authorization, X-User-ID, X-User-Role", got)

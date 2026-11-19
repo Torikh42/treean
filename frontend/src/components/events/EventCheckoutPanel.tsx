@@ -4,6 +4,7 @@ import type { Event, TicketType } from "@/lib/api/generated/types.gen";
 import { parseApiError, type ParsedApiError } from "@/lib/api/errors";
 import { formatDateTime, formatIDR } from "@/lib/format";
 import { MAX_TICKETS_PER_ORDER } from "@/hooks/useEventCheckout";
+import type { UserRole } from "@/store/auth-store";
 import { BrutalButton } from "@/components/ui/BrutalButton";
 import { BrutalCard } from "@/components/ui/BrutalCard";
 import { StateNotice } from "@/components/ui/StateNotice";
@@ -11,6 +12,8 @@ import { StateNotice } from "@/components/ui/StateNotice";
 interface EventCheckoutPanelProps {
   event: Event | undefined;
   tiers: ReadonlyArray<TicketType>;
+  authenticated: boolean;
+  activeRole: UserRole | null;
   isLoading: boolean;
   error: unknown;
   onRetry: () => void;
@@ -26,6 +29,8 @@ interface EventCheckoutPanelProps {
 export function EventCheckoutPanel({
   event,
   tiers,
+  authenticated,
+  activeRole,
   isLoading,
   error,
   onRetry,
@@ -179,14 +184,55 @@ export function EventCheckoutPanel({
               </div>
             )}
 
-            <BrutalButton
-              variant="secondary"
-              className="mt-5 w-full bg-ink text-signal hover:bg-neutral-800 hover:text-signal"
-              disabled={isSubmitting || totalSelected === 0}
-              onClick={onSubmit}
-            >
-              {isSubmitting ? "Locking Quota..." : "Reserve Tickets (15m Hold)"}
-            </BrutalButton>
+            {!authenticated ? (
+              <div className="mt-4 space-y-3 border-2 border-ink bg-surface p-3">
+                <p className="font-mono text-xs font-bold uppercase">Buyer Sign-In Required</p>
+                <p className="text-sm text-ink-muted">
+                  Sign in as a Buyer to reserve tickets under a 15-minute payment hold.
+                </p>
+                <div className="flex flex-col gap-2">
+                  <Link
+                    to="/login"
+                    search={{ redirect: `/events/${event.id}` }}
+                    className="inline-flex min-h-[44px] w-full items-center justify-center border-2 border-ink bg-signal px-4 py-2 text-sm font-bold text-ink brutal-press"
+                  >
+                    Sign In as Buyer to Reserve
+                  </Link>
+                  <Link
+                    to="/register"
+                    search={{ redirect: `/events/${event.id}` }}
+                    className="inline-flex min-h-[44px] w-full items-center justify-center border-2 border-ink bg-canvas px-4 py-2 text-sm font-bold text-ink brutal-press"
+                  >
+                    Register Buyer Account
+                  </Link>
+                </div>
+              </div>
+            ) : activeRole === "ORGANIZER" ? (
+              <>
+                <div className="mt-4 border-2 border-ink bg-surface p-3" role="status">
+                  <p className="font-mono text-xs font-bold uppercase">Buyer Account Required</p>
+                  <p className="mt-1 text-sm text-ink-muted">
+                    Ticket checkout requires a Buyer account. Organizer accounts cannot purchase tickets.
+                  </p>
+                </div>
+                <BrutalButton
+                  variant="secondary"
+                  className="mt-4 w-full bg-ink text-signal"
+                  disabled
+                >
+                  Reserve Tickets (Buyer Only)
+                </BrutalButton>
+              </>
+            ) : (
+              <BrutalButton
+                variant="secondary"
+                className="mt-5 w-full bg-ink text-signal hover:bg-neutral-800 hover:text-signal"
+                disabled={isSubmitting || totalSelected === 0}
+                onClick={onSubmit}
+              >
+                {isSubmitting ? "Locking Quota..." : "Reserve Tickets (15m Hold)"}
+              </BrutalButton>
+            )}
           </BrutalCard>
         </div>
       </div>

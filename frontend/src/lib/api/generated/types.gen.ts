@@ -235,7 +235,36 @@ export type TicketType = {
     total_quota: number;
 };
 
+export type UpdateEventBody = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    description?: string;
+    event_date: string;
+    /**
+     * Between 2 and 10 ticket types
+     */
+    ticket_types: Array<UpdateTierBody> | null;
+    title: string;
+    venue: string;
+};
+
+export type UpdateTierBody = {
+    /**
+     * Existing tier ID (omit to create a new tier)
+     */
+    id?: string;
+    name: string;
+    price_idr: number;
+    total_quota: number;
+};
+
 export type User = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
     created_at: string;
     email: string;
     id: string;
@@ -263,7 +292,7 @@ export type ApiErrorWritable = {
 
 export type AuthResultWritable = {
     access_token: string;
-    user: User;
+    user: UserWritable;
 };
 
 export type CreateEventBodyWritable = {
@@ -371,6 +400,25 @@ export type RegisterBodyWritable = {
     role: 'ORGANIZER' | 'BUYER';
 };
 
+export type UpdateEventBodyWritable = {
+    description?: string;
+    event_date: string;
+    /**
+     * Between 2 and 10 ticket types
+     */
+    ticket_types: Array<UpdateTierBody> | null;
+    title: string;
+    venue: string;
+};
+
+export type UserWritable = {
+    created_at: string;
+    email: string;
+    id: string;
+    name: string;
+    role: string;
+};
+
 export type WebhookResultWritable = {
     idempotent_replay: boolean;
     order?: OrderWritable;
@@ -401,6 +449,31 @@ export type LoginUserResponses = {
 };
 
 export type LoginUserResponse = LoginUserResponses[keyof LoginUserResponses];
+
+export type GetMeData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/me';
+};
+
+export type GetMeErrors = {
+    /**
+     * Error
+     */
+    default: ApiError;
+};
+
+export type GetMeError = GetMeErrors[keyof GetMeErrors];
+
+export type GetMeResponses = {
+    /**
+     * OK
+     */
+    200: User;
+};
+
+export type GetMeResponse = GetMeResponses[keyof GetMeResponses];
 
 export type RegisterUserData = {
     body: RegisterBodyWritable;
@@ -502,6 +575,33 @@ export type CreateEventResponses = {
 
 export type CreateEventResponse = CreateEventResponses[keyof CreateEventResponses];
 
+export type DeleteEventData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/events/{id}';
+};
+
+export type DeleteEventErrors = {
+    /**
+     * Error
+     */
+    default: ApiError;
+};
+
+export type DeleteEventError = DeleteEventErrors[keyof DeleteEventErrors];
+
+export type DeleteEventResponses = {
+    /**
+     * No Content
+     */
+    204: void;
+};
+
+export type DeleteEventResponse = DeleteEventResponses[keyof DeleteEventResponses];
+
 export type GetEventData = {
     body?: never;
     path: {
@@ -528,6 +628,33 @@ export type GetEventResponses = {
 };
 
 export type GetEventResponse = GetEventResponses[keyof GetEventResponses];
+
+export type UpdateEventData = {
+    body: UpdateEventBodyWritable;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/events/{id}';
+};
+
+export type UpdateEventErrors = {
+    /**
+     * Error
+     */
+    default: ApiError;
+};
+
+export type UpdateEventError = UpdateEventErrors[keyof UpdateEventErrors];
+
+export type UpdateEventResponses = {
+    /**
+     * OK
+     */
+    200: Event;
+};
+
+export type UpdateEventResponse = UpdateEventResponses[keyof UpdateEventResponses];
 
 export type ListMyOrdersData = {
     body?: never;
@@ -659,6 +786,31 @@ export type PayOrderDemoResponses = {
 };
 
 export type PayOrderDemoResponse = PayOrderDemoResponses[keyof PayOrderDemoResponses];
+
+export type ListOrganizerEventsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/organizer/events';
+};
+
+export type ListOrganizerEventsErrors = {
+    /**
+     * Error
+     */
+    default: ApiError;
+};
+
+export type ListOrganizerEventsError = ListOrganizerEventsErrors[keyof ListOrganizerEventsErrors];
+
+export type ListOrganizerEventsResponses = {
+    /**
+     * OK
+     */
+    200: Array<Event> | null;
+};
+
+export type ListOrganizerEventsResponse = ListOrganizerEventsResponses[keyof ListOrganizerEventsResponses];
 
 export type PaymentWebhookData = {
     body?: PaymentWebhookBodyWritable;

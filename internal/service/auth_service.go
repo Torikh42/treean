@@ -123,6 +123,17 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthR
 	return &AuthResult{User: u, AccessToken: tok}, nil
 }
 
+// GetProfile retrieves the authenticated user's profile by ID.
+func (s *AuthService) GetProfile(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
+	if err := validateServiceCall(ctx, "getting user profile", s != nil && s.users != nil); err != nil {
+		return nil, err
+	}
+	if userID == uuid.Nil {
+		return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeUnauthorized, "authentication is required")
+	}
+	return s.users.FindByID(ctx, userID)
+}
+
 // ParseJWT validates a bearer token and extracts the authenticated Actor.
 func (s *AuthService) ParseJWT(tokenStr string) (domain.Actor, error) {
 	if !s.hasJWTSecret() {
