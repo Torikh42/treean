@@ -629,40 +629,46 @@ func TestCORS_AllowsTrimmedOriginOnGET(t *testing.T) {
 func TestCORS_HandlesOptionsPreflight(t *testing.T) {
 	t.Parallel()
 
-	called := false
-	h := middleware.CORS([]string{"http://localhost:5173"})(
-		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-			called = true
-		}),
-	)
+	for _, reqMethod := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		t.Run(reqMethod, func(t *testing.T) {
+			t.Parallel()
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/orders", nil)
-	req.Header.Set("Origin", "http://localhost:5173")
-	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
-	req.Header.Set("Access-Control-Request-Headers", "Content-Type, Authorization")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
+			called := false
+			h := middleware.CORS([]string{"http://localhost:5173"})(
+				http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+					called = true
+				}),
+			)
 
-	if called {
-		t.Fatal("expected OPTIONS preflight not to invoke next handler")
-	}
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", rec.Code)
-	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
-		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "http://localhost:5173")
-	}
-	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, OPTIONS" {
-		t.Fatalf("Access-Control-Allow-Methods = %q, want %q", got, "GET, POST, OPTIONS")
-	}
-	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role" {
-		t.Fatalf("Access-Control-Allow-Headers = %q, want %q", got, "Content-Type, Authorization, X-User-ID, X-User-Role")
-	}
-	if got := rec.Header().Get("Access-Control-Max-Age"); got != "600" {
-		t.Fatalf("Access-Control-Max-Age = %q, want 600", got)
-	}
-	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
-		t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", got)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/events/123", nil)
+			req.Header.Set("Origin", "http://localhost:5173")
+			req.Header.Set("Access-Control-Request-Method", reqMethod)
+			req.Header.Set("Access-Control-Request-Headers", "Content-Type, Authorization")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if called {
+				t.Fatal("expected OPTIONS preflight not to invoke next handler")
+			}
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204", rec.Code)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+				t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "http://localhost:5173")
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, DELETE, OPTIONS" {
+				t.Fatalf("Access-Control-Allow-Methods = %q, want %q", got, "GET, POST, PUT, DELETE, OPTIONS")
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role" {
+				t.Fatalf("Access-Control-Allow-Headers = %q, want %q", got, "Content-Type, Authorization, X-User-ID, X-User-Role")
+			}
+			if got := rec.Header().Get("Access-Control-Max-Age"); got != "600" {
+				t.Fatalf("Access-Control-Max-Age = %q, want 600", got)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+				t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", got)
+			}
+		})
 	}
 }
 

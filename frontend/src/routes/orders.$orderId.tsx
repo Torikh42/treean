@@ -1,8 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { OrderDetailCard } from "@/components/orders/OrderDetailCard";
 import { useOrderDetail } from "@/hooks/useOrderDetail";
+import { requireRole } from "@/lib/auth-guards";
 
 export const Route = createFileRoute("/orders/$orderId")({
+  beforeLoad: ({ location }) => {
+    requireRole("BUYER", location.href);
+  },
   component: OrderDetailPage,
 });
 

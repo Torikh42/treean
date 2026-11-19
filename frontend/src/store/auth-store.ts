@@ -2,44 +2,30 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { User } from "@/lib/api/generated/types.gen";
 
-export type AuthMode = "jwt" | "demo";
-export type DemoRole = "BUYER" | "ORGANIZER";
+export type UserRole = "BUYER" | "ORGANIZER";
 
 export interface AuthState {
-  authMode: AuthMode;
   accessToken: string | null;
   user: User | null;
-  demoUserId: string;
-  demoRole: DemoRole;
   setJwtSession: (user: User, accessToken: string) => void;
-  setDemoIdentity: (userId: string, role: DemoRole) => void;
-  setAuthMode: (mode: AuthMode) => void;
+  updateUser: (user: User) => void;
   clearSession: () => void;
 }
-
-const DEFAULT_DEMO_BUYER_ID = "22222222-2222-2222-2222-222222222221";
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
-      authMode: "demo",
       accessToken: null,
       user: null,
-      demoUserId: DEFAULT_DEMO_BUYER_ID,
-      demoRole: "BUYER",
       setJwtSession: (user, accessToken) =>
         set({
-          authMode: "jwt",
           accessToken,
           user,
         }),
-      setDemoIdentity: (demoUserId, demoRole) =>
+      updateUser: (user) =>
         set({
-          authMode: "demo",
-          demoUserId,
-          demoRole,
+          user,
         }),
-      setAuthMode: (authMode) => set({ authMode }),
       clearSession: () =>
         set({
           accessToken: null,
@@ -52,17 +38,13 @@ export const useAuthStore = create<AuthState>()(
   ),
 );
 
-export function getActiveRole(state: AuthState): DemoRole | null {
-  if (state.authMode === "jwt") {
-    if (!state.accessToken || !state.user) return null;
-    return state.user.role === "ORGANIZER" ? "ORGANIZER" : "BUYER";
-  }
-  return state.demoUserId.trim() ? state.demoRole : null;
+export function getActiveRole(state: Pick<AuthState, "accessToken" | "user">): UserRole | null {
+  if (!state.accessToken || !state.user) return null;
+  if (state.user.role === "ORGANIZER") return "ORGANIZER";
+  if (state.user.role === "BUYER") return "BUYER";
+  return null;
 }
 
-export function isAuthenticated(state: AuthState): boolean {
-  if (state.authMode === "jwt") {
-    return Boolean(state.accessToken && state.user);
-  }
-  return Boolean(state.demoUserId.trim());
+export function isAuthenticated(state: Pick<AuthState, "accessToken" | "user">): boolean {
+  return Boolean(state.accessToken && state.user);
 }

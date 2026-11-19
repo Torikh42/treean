@@ -878,3 +878,215 @@ func TestIntegration_FlashSale_200ConcurrentBuyers_ZeroOversell(t *testing.T) {
 		t.Fatalf("expected remaining_quota = 0, got %d", remQuota)
 	}
 }
+
+func registerIntegrationJWT(t *testing.T, env *testEnv, emailPrefix, name, role string) service.AuthResult {
+	t.Helper()
+
+	email := fmt.Sprintf("%s-%s@event.local", emailPrefix, uuid.NewString()[:8])
+	status, raw := mustJSON(t, env, "/api/v1/auth/register", http.MethodPost, map[string]any{
+		"email":    email,
+		"name":     name,
+		"password": "password123",
+		"role":     role,
+	}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("register %s status = %d, want 201 (body=%s)", email, status, string(raw))
+	}
+	return mustUnmarshal[service.AuthResult](t, raw)
+}
+
+func bearerHeaders(token string) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + token}
+}
+
+func findTierByName(t *testing.T, ev domain.Event, name string) domain.TicketType {
+	t.Helper()
+
+	for _, tt := range ev.TicketTypes {
+		if tt.Name == name {
+			return tt
+		}
+	}
+	t.Fatalf("tier %q not found in event %s (%+v)", name, ev.ID, ev.TicketTypes)
+	return domain.TicketType{}
+}
+
+func TestIntegration_AuthMe_And_OrganizerEventsList(t *testing.T) {
+	env := setupTestEnv(t)
+
+	org1 := registerIntegrationJWT(t, env, "org1", "Org One", roleOrganizer)
+	org2 := registerIntegrationJWT(t, env, "org2", "Org Two", roleOrganizer)
+	buyer := registerIntegrationJWT(t, env, "buyer", "Buyer One", roleBuyer)
+
+	unauthStatus, unauthRaw := mustJSON(t, env, "/api/v1/auth/me", http.MethodGet, nil, nil)
+	assertAPIError(t, unauthStatus, unauthRaw, http.StatusUnauthorized, domain.ErrCodeUnauthorized)
+
+	meStatus, meRaw := mustJSON(t, env, "/api/v1/auth/me", http.MethodGet, nil, bearerHeaders(buyer.AccessToken))
+	if meStatus != http.StatusOK {
+		t.Fatalf("GET /api/v1/auth/me status = %d, want 200 (body=%s)", meStatus, string(meRaw))
+	}
+	if bytes.Contains(meRaw, []byte("password_hash")) {
+		t.Fatalf("GET /api/v1/auth/me leaked password_hash: %s", string(meRaw))
+	}
+	me := mustUnmarshal[domain.User](t, meRaw)
+	if me.ID != buyer.User.ID || me.Role != domain.RoleBuyer {
+		t.Fatalf("unexpected /auth/me payload: %+v", me)
+	}
+
+	future := time.Now().UTC().Add(48 * time.Hour)
+	ev1Status, ev1Raw := mustJSON(t, env, "/api/v1/events", http.MethodPost, map[string]any{
+		"title": "Org1 Event", "venue": "Hall 1", "event_date": future,
+		"ticket_types": []map[string]any{
+			{"name": "Reguler", "price_idr": 100000, "total_quota": 20},
+			{"name": "VIP", "price_idr": 250000, "total_quota": 10},
+		},
+	}, bearerHeaders(org1.AccessToken))
+	if ev1Status != http.StatusCreated {
+		t.Fatalf("create org1 event status = %d, want 201 (body=%s)", ev1Status, string(ev1Raw))
+	}
+	ev1 := mustUnmarshal[domain.Event](t, ev1Raw)
+
+	ev2Status, ev2Raw := mustJSON(t, env, "/api/v1/events", http.MethodPost, map[string]any{
+		"title": "Org2 Event", "venue": "Hall 2", "event_date": future,
+		"ticket_types": []map[string]any{
+			{"name": "Reguler", "price_idr": 100000, "total_quota": 20},
+			{"name": "VIP", "price_idr": 250000, "total_quota": 10},
+		},
+	}, bearerHeaders(org2.AccessToken))
+	if ev2Status != http.StatusCreated {
+		t.Fatalf("create org2 event status = %d, want 201 (body=%s)", ev2Status, string(ev2Raw))
+	}
+
+	buyerListStatus, buyerListRaw := mustJSON(t, env, "/api/v1/organizer/events", http.MethodGet, nil, bearerHeaders(buyer.AccessToken))
+	assertAPIError(t, buyerListStatus, buyerListRaw, http.StatusForbidden, domain.ErrCodeForbidden)
+
+	org1ListStatus, org1ListRaw := mustJSON(t, env, "/api/v1/organizer/events", http.MethodGet, nil, bearerHeaders(org1.AccessToken))
+	if org1ListStatus != http.StatusOK {
+		t.Fatalf("GET /api/v1/organizer/events status = %d, want 200 (body=%s)", org1ListStatus, string(org1ListRaw))
+	}
+	listed := mustUnmarshal[[]domain.Event](t, org1ListRaw)
+	if len(listed) != 1 || listed[0].ID != ev1.ID {
+		t.Fatalf("GET /api/v1/organizer/events = %+v, want only event %s", listed, ev1.ID)
+	}
+}
+
+func TestIntegration_OrganizerEventUpdate_SwapReuseAndConflicts(t *testing.T) {
+	env := setupTestEnv(t)
+
+	org := registerIntegrationJWT(t, env, "org-upd", "Org Update", roleOrganizer)
+	buyer := registerIntegrationJWT(t, env, "buyer-upd", "Buyer Update", roleBuyer)
+	future := time.Now().UTC().Add(72 * time.Hour)
+
+	createStatus, createRaw := mustJSON(t, env, "/api/v1/events", http.MethodPost, map[string]any{
+		"title": "Swap Event", "venue": "Hall A", "event_date": future,
+		"ticket_types": []map[string]any{
+			{"name": "Reguler", "price_idr": 150000, "total_quota": 20},
+			{"name": "VIP", "price_idr": 350000, "total_quota": 10},
+		},
+	}, bearerHeaders(org.AccessToken))
+	if createStatus != http.StatusCreated {
+		t.Fatalf("create event status = %d, want 201 (body=%s)", createStatus, string(createRaw))
+	}
+	ev := mustUnmarshal[domain.Event](t, createRaw)
+	regTier := findTierByName(t, ev, "Reguler")
+	vipTier := findTierByName(t, ev, "VIP")
+
+	_ = createOrder(t, env, bearerHeaders(buyer.AccessToken), ev.ID, []map[string]any{
+		{"ticket_type_id": regTier.ID.String(), "quantity": 3},
+	})
+
+	// 1. Quota shrink below sold/held (3) -> 409 QUOTA_CONFLICT.
+	shrinkStatus, shrinkRaw := mustJSON(t, env, "/api/v1/events/"+ev.ID.String(), http.MethodPut, map[string]any{
+		"title": "Swap Event", "venue": "Hall A", "event_date": future,
+		"ticket_types": []map[string]any{
+			{"id": regTier.ID.String(), "name": "Reguler", "price_idr": 150000, "total_quota": 2},
+			{"id": vipTier.ID.String(), "name": "VIP", "price_idr": 350000, "total_quota": 10},
+		},
+	}, bearerHeaders(org.AccessToken))
+	assertAPIError(t, shrinkStatus, shrinkRaw, http.StatusConflict, domain.ErrCodeQuotaConflict)
+
+	// 2. Removing tier with orders -> 409 TIER_HAS_ORDERS.
+	dropStatus, dropRaw := mustJSON(t, env, "/api/v1/events/"+ev.ID.String(), http.MethodPut, map[string]any{
+		"title": "Swap Event", "venue": "Hall A", "event_date": future,
+		"ticket_types": []map[string]any{
+			{"id": vipTier.ID.String(), "name": "VIP", "price_idr": 350000, "total_quota": 10},
+			{"name": "VVIP", "price_idr": 500000, "total_quota": 5},
+		},
+	}, bearerHeaders(org.AccessToken))
+	assertAPIError(t, dropStatus, dropRaw, http.StatusConflict, domain.ErrCodeTierHasOrders)
+
+	// 3. Swap names between existing tiers (Reguler <-> VIP) -> 200 without unique violation.
+	swapStatus, swapRaw := mustJSON(t, env, "/api/v1/events/"+ev.ID.String(), http.MethodPut, map[string]any{
+		"title": "Swap Event v2", "venue": "Hall B", "event_date": future,
+		"ticket_types": []map[string]any{
+			{"id": regTier.ID.String(), "name": "VIP", "price_idr": 175000, "total_quota": 25},
+			{"id": vipTier.ID.String(), "name": "Reguler", "price_idr": 350000, "total_quota": 12},
+		},
+	}, bearerHeaders(org.AccessToken))
+	if swapStatus != http.StatusOK {
+		t.Fatalf("swap PUT status = %d, want 200 (body=%s)", swapStatus, string(swapRaw))
+	}
+	swapped := mustUnmarshal[domain.Event](t, swapRaw)
+	if got := findTierByName(t, swapped, "VIP"); got.ID != regTier.ID || got.RemainingQuota != 22 {
+		t.Fatalf("unexpected swapped VIP tier: %+v", got)
+	}
+
+	// 4. Rename kept tier ("VIP" -> "Patron") and reuse old name ("VIP") for a brand-new tier -> 200.
+	reuseStatus, reuseRaw := mustJSON(t, env, "/api/v1/events/"+ev.ID.String(), http.MethodPut, map[string]any{
+		"title": "Swap Event v3", "venue": "Hall C", "event_date": future,
+		"ticket_types": []map[string]any{
+			{"id": regTier.ID.String(), "name": "Patron", "price_idr": 200000, "total_quota": 30},
+			{"id": vipTier.ID.String(), "name": "Reguler", "price_idr": 350000, "total_quota": 12},
+			{"name": "VIP", "price_idr": 600000, "total_quota": 8},
+		},
+	}, bearerHeaders(org.AccessToken))
+	if reuseStatus != http.StatusOK {
+		t.Fatalf("rename+reuse PUT status = %d, want 200 (body=%s)", reuseStatus, string(reuseRaw))
+	}
+	reused := mustUnmarshal[domain.Event](t, reuseRaw)
+	if len(reused.TicketTypes) != 3 {
+		t.Fatalf("expected 3 tiers after reuse PUT, got %d", len(reused.TicketTypes))
+	}
+	if newVIP := findTierByName(t, reused, "VIP"); newVIP.ID == regTier.ID || newVIP.RemainingQuota != 8 {
+		t.Fatalf("unexpected new VIP tier: %+v", newVIP)
+	}
+}
+
+func TestIntegration_OrganizerEventDelete(t *testing.T) {
+	env := setupTestEnv(t)
+
+	org := registerIntegrationJWT(t, env, "org-del", "Org Delete", roleOrganizer)
+	buyer := registerIntegrationJWT(t, env, "buyer-del", "Buyer Delete", roleBuyer)
+	future := time.Now().UTC().Add(72 * time.Hour)
+
+	makeEvent := func(title string) domain.Event {
+		st, raw := mustJSON(t, env, "/api/v1/events", http.MethodPost, map[string]any{
+			"title": title, "venue": "Hall D", "event_date": future,
+			"ticket_types": []map[string]any{
+				{"name": "Reguler", "price_idr": 100000, "total_quota": 10},
+				{"name": "VIP", "price_idr": 200000, "total_quota": 5},
+			},
+		}, bearerHeaders(org.AccessToken))
+		if st != http.StatusCreated {
+			t.Fatalf("create event status = %d, want 201 (body=%s)", st, string(raw))
+		}
+		return mustUnmarshal[domain.Event](t, raw)
+	}
+
+	usedEv := makeEvent("Used Event")
+	unusedEv := makeEvent("Unused Event")
+	_ = createOrder(t, env, bearerHeaders(buyer.AccessToken), usedEv.ID, []map[string]any{
+		{"ticket_type_id": usedEv.TicketTypes[0].ID.String(), "quantity": 1},
+	})
+
+	delUsedStatus, delUsedRaw := mustJSON(t, env, "/api/v1/events/"+usedEv.ID.String(), http.MethodDelete, nil, bearerHeaders(org.AccessToken))
+	assertAPIError(t, delUsedStatus, delUsedRaw, http.StatusConflict, domain.ErrCodeEventHasOrders)
+
+	delUnusedStatus, delUnusedRaw := mustJSON(t, env, "/api/v1/events/"+unusedEv.ID.String(), http.MethodDelete, nil, bearerHeaders(org.AccessToken))
+	if delUnusedStatus != http.StatusNoContent || len(delUnusedRaw) != 0 {
+		t.Fatalf("DELETE unused event = (%d, %q), want 204 empty body", delUnusedStatus, string(delUnusedRaw))
+	}
+
+	getGoneStatus, getGoneRaw := mustJSON(t, env, "/api/v1/events/"+unusedEv.ID.String(), http.MethodGet, nil, nil)
+	assertAPIError(t, getGoneStatus, getGoneRaw, http.StatusNotFound, domain.ErrCodeEventNotFound)
+}

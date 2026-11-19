@@ -12,6 +12,12 @@ function EventsIndexPage() {
   return (
     <EventCatalogList
       events={catalog.events}
+      totalCount={catalog.totalCount}
+      searchQuery={catalog.searchQuery}
+      onSearchChange={catalog.setSearchQuery}
+      onClearSearch={catalog.clearSearch}
+      authenticated={catalog.authenticated}
+      activeRole={catalog.activeRole}
       isLoading={catalog.isLoading}
       isFetching={catalog.isFetching}
       error={catalog.error}

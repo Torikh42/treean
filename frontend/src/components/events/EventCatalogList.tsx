@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
-import { ArrowsClockwise, CalendarBlank, MapPin } from "@phosphor-icons/react";
+import { ArrowsClockwise, CalendarBlank, MagnifyingGlass, MapPin, X } from "@phosphor-icons/react";
 import type { Event } from "@/lib/api/generated/types.gen";
+import type { UserRole } from "@/store/auth-store";
 import { formatDateTime, formatIDR } from "@/lib/format";
 import { parseApiError } from "@/lib/api/errors";
 import { BrutalButton } from "@/components/ui/BrutalButton";
@@ -9,6 +10,12 @@ import { StateNotice } from "@/components/ui/StateNotice";
 
 interface EventCatalogListProps {
   events: ReadonlyArray<Event>;
+  totalCount: number;
+  searchQuery: string;
+  onSearchChange: (val: string) => void;
+  onClearSearch: () => void;
+  authenticated: boolean;
+  activeRole: UserRole | null;
   isLoading: boolean;
   isFetching: boolean;
   error: unknown;
@@ -17,11 +24,19 @@ interface EventCatalogListProps {
 
 export function EventCatalogList({
   events,
+  totalCount,
+  searchQuery,
+  onSearchChange,
+  onClearSearch,
+  authenticated,
+  activeRole,
   isLoading,
   isFetching,
   error,
   onRefresh,
 }: EventCatalogListProps) {
+  const hasActiveSearch = searchQuery.trim().length > 0;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b-3 border-ink pb-4">
@@ -48,6 +63,38 @@ export function EventCatalogList({
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="relative flex min-w-0 flex-1 items-center sm:max-w-md">
+          <span className="sr-only">Search events by title or venue</span>
+          <MagnifyingGlass
+            size={18}
+            weight="bold"
+            aria-hidden="true"
+            className="pointer-events-none absolute left-3 text-ink-muted"
+          />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search by event title or venue..."
+            className="min-h-[44px] w-full border-2 border-ink bg-surface pl-10 pr-3 text-sm font-medium text-ink placeholder:text-ink-muted"
+          />
+        </label>
+
+        {hasActiveSearch && (
+          <BrutalButton variant="secondary" onClick={onClearSearch}>
+            <X size={16} weight="bold" />
+            Clear Filter
+          </BrutalButton>
+        )}
+
+        {!isLoading && !error && totalCount > 0 && (
+          <span className="font-mono text-xs font-bold uppercase text-ink-muted">
+            Showing {events.length} of {totalCount} event(s)
+          </span>
+        )}
+      </div>
+
       {isLoading && (
         <StateNotice
           kind="loading"
@@ -65,18 +112,54 @@ export function EventCatalogList({
         />
       )}
 
-      {!isLoading && !error && events.length === 0 && (
+      {!isLoading && !error && totalCount === 0 && (
         <StateNotice
           kind="empty"
           title="No events published yet"
-          detail="Switch to Organizer role and create an event with at least 2 ticket tiers."
+          detail={
+            activeRole === "ORGANIZER"
+              ? "Publish your first event with at least 2 ticket tiers from the Organizer Console."
+              : activeRole === "BUYER"
+                ? "No ticketed events are live yet. Refresh shortly or test concurrency in the Flash Sale Lab."
+                : "Sign in or register as an Organizer to publish an event with at least 2 ticket tiers."
+          }
           action={
-            <Link
-              to="/organizer"
-              className="inline-flex min-h-[44px] items-center border-2 border-ink bg-signal px-4 py-2 text-sm font-bold brutal-press"
-            >
-              Create Event
-            </Link>
+            activeRole === "ORGANIZER" ? (
+              <Link
+                to="/organizer"
+                className="inline-flex min-h-[44px] items-center border-2 border-ink bg-signal px-4 py-2 text-sm font-bold brutal-press"
+              >
+                Create Event
+              </Link>
+            ) : !authenticated ? (
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  to="/register"
+                  className="inline-flex min-h-[44px] items-center border-2 border-ink bg-signal px-4 py-2 text-sm font-bold brutal-press"
+                >
+                  Register as Organizer
+                </Link>
+                <Link
+                  to="/login"
+                  className="inline-flex min-h-[44px] items-center border-2 border-ink bg-surface px-4 py-2 text-sm font-bold brutal-press"
+                >
+                  Sign In
+                </Link>
+              </div>
+            ) : undefined
+          }
+        />
+      )}
+
+      {!isLoading && !error && totalCount > 0 && events.length === 0 && (
+        <StateNotice
+          kind="empty"
+          title="No matching events"
+          detail={`No published events match "${searchQuery.trim()}".`}
+          action={
+            <BrutalButton variant="signal" onClick={onClearSearch}>
+              Reset Search
+            </BrutalButton>
           }
         />
       )}
@@ -86,7 +169,7 @@ export function EventCatalogList({
           const tiers = ev.ticket_types ?? [];
           const totalRemaining = tiers.reduce((sum, t) => sum + t.remaining_quota, 0);
           const totalCap = tiers.reduce((sum, t) => sum + t.total_quota, 0);
-          const isFeatured = idx === 0;
+          const isFeatured = idx === 0 && !hasActiveSearch;
 
           return (
             <BrutalCard key={ev.id} className={isFeatured ? "md:col-span-2" : ""}>
@@ -145,7 +228,7 @@ export function EventCatalogList({
                   params={{ eventId: ev.id }}
                   className="inline-flex min-h-[44px] items-center border-2 border-ink bg-signal px-5 py-2 text-sm font-bold brutal-press"
                 >
-                  Select Tickets (Max 4)
+                  {activeRole === "ORGANIZER" ? "View Event & Quotas" : "Select Tickets (Max 4)"}
                 </Link>
               </div>
             </BrutalCard>

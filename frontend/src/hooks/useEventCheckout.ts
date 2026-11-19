@@ -10,7 +10,7 @@ import {
   listMyOrdersQueryKey,
 } from "@/lib/api/generated/@tanstack/react-query.gen";
 import { parseApiError, type ParsedApiError } from "@/lib/api/errors";
-import { isAuthenticated, useAuthStore } from "@/store/auth-store";
+import { getActiveRole, isAuthenticated, useAuthStore } from "@/store/auth-store";
 
 export const MAX_TICKETS_PER_ORDER = 4;
 
@@ -18,6 +18,8 @@ export function useEventCheckout(eventId: string) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const auth = useAuthStore();
+  const authenticated = isAuthenticated(auth);
+  const activeRole = getActiveRole(auth);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [submitError, setSubmitError] = useState<ParsedApiError | null>(null);
 
@@ -60,12 +62,22 @@ export function useEventCheckout(eventId: string) {
   }
 
   function submitCheckout() {
-    if (!isAuthenticated(auth)) {
+    if (!authenticated) {
       setSubmitError({
         status: 401,
         code: "UNAUTHORIZED",
-        detail: "Select a Buyer identity or sign in before reserving tickets.",
-        actionHint: "Open Auth / Demo Identity in the top bar and pick Buyer 1.",
+        detail: "Sign in as a Buyer account before reserving tickets.",
+        actionHint: "Use Sign In as Buyer to Reserve and authenticate with a Buyer account.",
+      });
+      return;
+    }
+
+    if (activeRole !== "BUYER") {
+      setSubmitError({
+        status: 403,
+        code: "FORBIDDEN",
+        detail: "Ticket checkout requires a Buyer account.",
+        actionHint: "Organizer accounts cannot purchase buyer tickets. Sign in with a Buyer account.",
       });
       return;
     }
@@ -95,6 +107,8 @@ export function useEventCheckout(eventId: string) {
   return {
     event: eventQuery.data,
     tiers,
+    authenticated,
+    activeRole,
     isLoading: eventQuery.isLoading,
     error: eventQuery.error,
     refetch: eventQuery.refetch,

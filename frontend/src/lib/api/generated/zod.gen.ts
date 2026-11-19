@@ -161,7 +161,24 @@ export const zEvent = z.object({
     venue: z.string()
 });
 
+export const zUpdateTierBody = z.object({
+    id: z.uuid().optional(),
+    name: z.string().min(1).max(60),
+    price_idr: z.coerce.bigint().gte(BigInt(0)).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
+    total_quota: z.int().gte(1).lte(100000)
+});
+
+export const zUpdateEventBody = z.object({
+    $schema: z.url().readonly().optional(),
+    description: z.string().max(1000).optional(),
+    event_date: z.iso.datetime(),
+    ticket_types: z.array(zUpdateTierBody).min(2).max(10).nullable(),
+    title: z.string().min(3).max(150),
+    venue: z.string().min(2).max(150)
+});
+
 export const zUser = z.object({
+    $schema: z.url().readonly().optional(),
     created_at: z.iso.datetime(),
     email: z.string(),
     id: z.string(),
@@ -188,11 +205,6 @@ export const zApiErrorWritable = z.object({
     errors: z.array(zErrorDetail).nullish(),
     status: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }),
     title: z.string()
-});
-
-export const zAuthResultWritable = z.object({
-    access_token: z.string(),
-    user: zUser
 });
 
 export const zCreateEventBodyWritable = z.object({
@@ -276,6 +288,27 @@ export const zRegisterBodyWritable = z.object({
     role: z.enum(['ORGANIZER', 'BUYER'])
 });
 
+export const zUpdateEventBodyWritable = z.object({
+    description: z.string().max(1000).optional(),
+    event_date: z.iso.datetime(),
+    ticket_types: z.array(zUpdateTierBody).min(2).max(10).nullable(),
+    title: z.string().min(3).max(150),
+    venue: z.string().min(2).max(150)
+});
+
+export const zUserWritable = z.object({
+    created_at: z.iso.datetime(),
+    email: z.string(),
+    id: z.string(),
+    name: z.string(),
+    role: z.string()
+});
+
+export const zAuthResultWritable = z.object({
+    access_token: z.string(),
+    user: zUserWritable
+});
+
 export const zWebhookResultWritable = z.object({
     idempotent_replay: z.boolean(),
     order: zOrderWritable.optional(),
@@ -288,6 +321,11 @@ export const zLoginUserBody = zLoginBodyWritable;
  * OK
  */
 export const zLoginUserResponse = zAuthResult;
+
+/**
+ * OK
+ */
+export const zGetMeResponse = zUser;
 
 export const zRegisterUserBody = zRegisterBodyWritable;
 
@@ -315,6 +353,15 @@ export const zCreateEventBody2 = zCreateEventBodyWritable;
  */
 export const zCreateEventResponse = zEvent;
 
+export const zDeleteEventPath = z.object({
+    id: z.uuid()
+});
+
+/**
+ * No Content
+ */
+export const zDeleteEventResponse = z.void();
+
 export const zGetEventPath = z.object({
     id: z.uuid()
 });
@@ -323,6 +370,17 @@ export const zGetEventPath = z.object({
  * OK
  */
 export const zGetEventResponse = zEvent;
+
+export const zUpdateEventBody2 = zUpdateEventBodyWritable;
+
+export const zUpdateEventPath = z.object({
+    id: z.uuid()
+});
+
+/**
+ * OK
+ */
+export const zUpdateEventResponse = zEvent;
 
 /**
  * OK
@@ -362,6 +420,11 @@ export const zPayOrderDemoPath = z.object({
  * OK
  */
 export const zPayOrderDemoResponse = zWebhookResult;
+
+/**
+ * OK
+ */
+export const zListOrganizerEventsResponse = z.array(zEvent).nullable();
 
 export const zPaymentWebhookBody2 = zPaymentWebhookBodyWritable;
 

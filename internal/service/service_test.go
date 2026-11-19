@@ -95,20 +95,26 @@ func (m *mockUserRepo) EnsureDemoUser(_ context.Context, _ uuid.UUID, _ domain.R
 }
 
 type mockEventRepo struct {
-	mu           sync.Mutex
-	events       map[uuid.UUID]*domain.Event
-	tiers        map[uuid.UUID]*domain.TicketType
-	createErr    error
-	listErr      error
-	findErr      error
-	findOverride func(uuid.UUID) (*domain.Event, error)
-	created      *domain.Event
+	mu             sync.Mutex
+	events         map[uuid.UUID]*domain.Event
+	tiers          map[uuid.UUID]*domain.TicketType
+	tierHasOrders  map[uuid.UUID]bool
+	eventHasOrders map[uuid.UUID]bool
+	createErr      error
+	listErr        error
+	findErr        error
+	updateErr      error
+	deleteErr      error
+	findOverride   func(uuid.UUID) (*domain.Event, error)
+	created        *domain.Event
 }
 
 func newMockEventRepo() *mockEventRepo {
 	return &mockEventRepo{
-		events: make(map[uuid.UUID]*domain.Event),
-		tiers:  make(map[uuid.UUID]*domain.TicketType),
+		events:         make(map[uuid.UUID]*domain.Event),
+		tiers:          make(map[uuid.UUID]*domain.TicketType),
+		tierHasOrders:  make(map[uuid.UUID]bool),
+		eventHasOrders: make(map[uuid.UUID]bool),
 	}
 }
 
@@ -142,6 +148,21 @@ func (m *mockEventRepo) ListAll(_ context.Context) ([]domain.Event, error) {
 	return out, nil
 }
 
+func (m *mockEventRepo) ListByOrganizer(_ context.Context, organizerID uuid.UUID) ([]domain.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	out := make([]domain.Event, 0)
+	for _, ev := range m.events {
+		if ev.OrganizerID == organizerID {
+			out = append(out, m.snapshotEventLocked(ev))
+		}
+	}
+	return out, nil
+}
+
 func (m *mockEventRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -157,6 +178,135 @@ func (m *mockEventRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Event
 	}
 	snap := m.snapshotEventLocked(ev)
 	return &snap, nil
+}
+
+func (m *mockEventRepo) UpdateWithTiers(_ context.Context, organizerID uuid.UUID, ev *domain.Event) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	stored, ok := m.events[ev.ID]
+	if !ok {
+		return domain.NewDomainError(http.StatusNotFound, domain.ErrCodeEventNotFound, "event not found")
+	}
+	if stored.OrganizerID != organizerID {
+		return domain.NewDomainError(http.StatusForbidden, domain.ErrCodeForbidden, "cannot modify another organizer's event")
+	}
+
+	existingTiers := m.snapshotTiersMapLocked(stored.TicketTypes)
+	updatedTiers, kept, err := buildUpdatedTiers(stored.ID, existingTiers, ev.TicketTypes)
+	if err != nil {
+		return err
+	}
+	if err := m.ensureRemovedTiersUnusedLocked(existingTiers, kept); err != nil {
+		return err
+	}
+	m.replaceEventTiersLocked(existingTiers, kept, updatedTiers)
+
+	stored.Title = ev.Title
+	stored.Description = ev.Description
+	stored.Venue = ev.Venue
+	stored.EventDate = ev.EventDate
+	stored.TicketTypes = updatedTiers
+
+	snap := m.snapshotEventLocked(stored)
+	*ev = snap
+	return nil
+}
+
+func (m *mockEventRepo) snapshotTiersMapLocked(tiers []domain.TicketType) map[uuid.UUID]domain.TicketType {
+	out := make(map[uuid.UUID]domain.TicketType, len(tiers))
+	for _, tt := range tiers {
+		if live, exists := m.tiers[tt.ID]; exists {
+			out[tt.ID] = *live
+		} else {
+			out[tt.ID] = tt
+		}
+	}
+	return out
+}
+
+func buildUpdatedTiers(
+	eventID uuid.UUID,
+	existingTiers map[uuid.UUID]domain.TicketType,
+	input []domain.TicketType,
+) ([]domain.TicketType, map[uuid.UUID]struct{}, error) {
+	kept := make(map[uuid.UUID]struct{}, len(input))
+	updated := make([]domain.TicketType, len(input))
+	now := time.Now().UTC()
+	for i, tt := range input {
+		if tt.ID == uuid.Nil {
+			tt.ID = uuid.New()
+			tt.EventID = eventID
+			tt.RemainingQuota = tt.TotalQuota
+			tt.CreatedAt = now
+			updated[i] = tt
+			continue
+		}
+		prev, exists := existingTiers[tt.ID]
+		if !exists {
+			return nil, nil, domain.NewDomainError(http.StatusNotFound, domain.ErrCodeTicketTypeNotFound, "ticket type not found for event")
+		}
+		soldOrHeld := prev.TotalQuota - prev.RemainingQuota
+		if tt.TotalQuota < soldOrHeld {
+			return nil, nil, domain.NewDomainError(http.StatusConflict, domain.ErrCodeQuotaConflict, "total_quota below sold/held count")
+		}
+		tt.EventID = eventID
+		tt.RemainingQuota = tt.TotalQuota - soldOrHeld
+		tt.CreatedAt = prev.CreatedAt
+		updated[i] = tt
+		kept[tt.ID] = struct{}{}
+	}
+	return updated, kept, nil
+}
+
+func (m *mockEventRepo) ensureRemovedTiersUnusedLocked(existing map[uuid.UUID]domain.TicketType, kept map[uuid.UUID]struct{}) error {
+	for id := range existing {
+		if _, isKept := kept[id]; !isKept && m.tierHasOrders[id] {
+			return domain.NewDomainError(http.StatusConflict, domain.ErrCodeTierHasOrders, "tier has orders")
+		}
+	}
+	return nil
+}
+
+func (m *mockEventRepo) replaceEventTiersLocked(
+	existing map[uuid.UUID]domain.TicketType,
+	kept map[uuid.UUID]struct{},
+	updated []domain.TicketType,
+) {
+	for id := range existing {
+		if _, isKept := kept[id]; !isKept {
+			delete(m.tiers, id)
+		}
+	}
+	for i := range updated {
+		tt := updated[i]
+		m.tiers[tt.ID] = &tt
+	}
+}
+
+func (m *mockEventRepo) DeleteUnused(_ context.Context, organizerID, eventID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	stored, ok := m.events[eventID]
+	if !ok {
+		return domain.NewDomainError(http.StatusNotFound, domain.ErrCodeEventNotFound, "event not found")
+	}
+	if stored.OrganizerID != organizerID {
+		return domain.NewDomainError(http.StatusForbidden, domain.ErrCodeForbidden, "cannot delete another organizer's event")
+	}
+	if m.eventHasOrders[eventID] {
+		return domain.NewDomainError(http.StatusConflict, domain.ErrCodeEventHasOrders, "cannot delete event with existing orders")
+	}
+	for _, tt := range stored.TicketTypes {
+		delete(m.tiers, tt.ID)
+	}
+	delete(m.events, eventID)
+	return nil
 }
 
 func (m *mockEventRepo) snapshotEventLocked(ev *domain.Event) domain.Event {
@@ -583,6 +733,51 @@ func TestAuthService_EnsureDemoUser(t *testing.T) {
 	}
 }
 
+func TestAuthService_GetProfile(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	var nilSvc *service.AuthService
+	assertNonNilError(t, func() error { _, err := nilSvc.GetProfile(ctx, uuid.New()); return err }())
+
+	noRepo := service.NewAuthService(nil, "sec")
+	assertNonNilError(t, func() error { _, err := noRepo.GetProfile(ctx, uuid.New()); return err }())
+
+	repo := newMockUserRepo()
+	svc := service.NewAuthService(repo, "sec")
+	var nilCtx context.Context
+	assertNonNilError(t, func() error { _, err := svc.GetProfile(nilCtx, uuid.New()); return err }())
+
+	_, err := svc.GetProfile(ctx, uuid.Nil)
+	assertDomainErr(t, err, http.StatusUnauthorized, domain.ErrCodeUnauthorized)
+
+	_, err = svc.GetProfile(ctx, uuid.New())
+	assertDomainErr(t, err, http.StatusUnauthorized, domain.ErrCodeUnauthorized)
+
+	uid := uuid.New()
+	repo.usersByID[uid] = &domain.User{
+		ID:           uid,
+		Email:        "me@event.local",
+		Name:         "Me User",
+		PasswordHash: "hashed-secret",
+		Role:         domain.RoleBuyer,
+	}
+	u, err := svc.GetProfile(ctx, uid)
+	if err != nil {
+		t.Fatalf("GetProfile failed: %v", err)
+	}
+	if u.ID != uid || u.Email != "me@event.local" {
+		t.Fatalf("unexpected profile: %+v", u)
+	}
+	raw, err := json.Marshal(u)
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	if strings.Contains(string(raw), "password_hash") || strings.Contains(string(raw), "hashed-secret") {
+		t.Fatalf("GetProfile JSON leaked password hash: %s", string(raw))
+	}
+}
+
 func TestEventService_GuardsAndRoleChecks(t *testing.T) {
 	t.Parallel()
 
@@ -717,6 +912,204 @@ func TestEventService_ListAndGetSuccess(t *testing.T) {
 	if *ordRepo.expireCalls[1].eventID != ev.ID {
 		t.Fatalf("GetEvent ExpireDueOrders eventID = %s, want %s", *ordRepo.expireCalls[1].eventID, ev.ID)
 	}
+}
+
+func TestEventService_OrganizerCRUDGuardsAndValidation(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	org := domain.Actor{ID: uuid.New(), Role: domain.RoleOrganizer}
+	buyer := domain.Actor{ID: uuid.New(), Role: domain.RoleBuyer}
+	future := time.Now().UTC().Add(24 * time.Hour)
+	validUpdate := service.UpdateEventInput{
+		Title: "Updated Event", Venue: "Hall B", EventDate: future,
+		TicketTypes: []service.UpdateTierInput{
+			{Name: "Reguler", PriceIDR: 100000, TotalQuota: 20},
+			{Name: "VIP", PriceIDR: 250000, TotalQuota: 10},
+		},
+	}
+
+	var nilSvc *service.EventService
+	assertNonNilError(t, func() error { _, err := nilSvc.ListOrganizerEvents(ctx, org); return err }())
+	assertNonNilError(t, func() error { _, err := nilSvc.UpdateEvent(ctx, org, uuid.New(), validUpdate); return err }())
+	assertNonNilError(t, nilSvc.DeleteEvent(ctx, org, uuid.New()))
+
+	svc := service.NewEventService(newMockEventRepo(), &mockOrderRepo{})
+	var nilCtx context.Context
+	assertNonNilError(t, func() error { _, err := svc.ListOrganizerEvents(nilCtx, org); return err }())
+	assertNonNilError(t, func() error { _, err := svc.UpdateEvent(nilCtx, org, uuid.New(), validUpdate); return err }())
+	assertNonNilError(t, svc.DeleteEvent(nilCtx, org, uuid.New()))
+
+	_, err := svc.ListOrganizerEvents(ctx, buyer)
+	assertDomainErr(t, err, http.StatusForbidden, domain.ErrCodeForbidden)
+	_, err = svc.UpdateEvent(ctx, buyer, uuid.New(), validUpdate)
+	assertDomainErr(t, err, http.StatusForbidden, domain.ErrCodeForbidden)
+	err = svc.DeleteEvent(ctx, buyer, uuid.New())
+	assertDomainErr(t, err, http.StatusForbidden, domain.ErrCodeForbidden)
+
+	_, err = svc.UpdateEvent(ctx, org, uuid.Nil, validUpdate)
+	assertDomainErr(t, err, http.StatusUnprocessableEntity, domain.ErrCodeValidation)
+	err = svc.DeleteEvent(ctx, org, uuid.Nil)
+	assertDomainErr(t, err, http.StatusUnprocessableEntity, domain.ErrCodeValidation)
+
+	dupID := uuid.New()
+	nilTierID := uuid.Nil
+	badInputs := []struct {
+		name string
+		in   service.UpdateEventInput
+	}{
+		{
+			name: "duplicate tier IDs",
+			in: service.UpdateEventInput{
+				Title: "Valid", Venue: "Hall", EventDate: future,
+				TicketTypes: []service.UpdateTierInput{
+					{ID: &dupID, Name: "Tier A", PriceIDR: 1000, TotalQuota: 10},
+					{ID: &dupID, Name: "Tier B", PriceIDR: 2000, TotalQuota: 10},
+				},
+			},
+		},
+		{
+			name: "nil tier UUID pointer",
+			in: service.UpdateEventInput{
+				Title: "Valid", Venue: "Hall", EventDate: future,
+				TicketTypes: []service.UpdateTierInput{
+					{ID: &nilTierID, Name: "Tier A", PriceIDR: 1000, TotalQuota: 10},
+					{Name: "Tier B", PriceIDR: 2000, TotalQuota: 10},
+				},
+			},
+		},
+		{
+			name: "duplicate case-insensitive tier names",
+			in: service.UpdateEventInput{
+				Title: "Valid", Venue: "Hall", EventDate: future,
+				TicketTypes: []service.UpdateTierInput{
+					{Name: "VIP", PriceIDR: 1000, TotalQuota: 10},
+					{Name: " vip ", PriceIDR: 2000, TotalQuota: 10},
+				},
+			},
+		},
+	}
+	for _, tc := range badInputs {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, updateErr := svc.UpdateEvent(ctx, org, uuid.New(), tc.in)
+			assertDomainErr(t, updateErr, http.StatusUnprocessableEntity, domain.ErrCodeValidation)
+		})
+	}
+}
+
+func TestEventService_OrganizerCRUDFlow(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	evRepo := newMockEventRepo()
+	ordRepo := &mockOrderRepo{}
+	svc := service.NewEventService(evRepo, ordRepo)
+
+	org1 := domain.Actor{ID: uuid.New(), Role: domain.RoleOrganizer}
+	org2 := domain.Actor{ID: uuid.New(), Role: domain.RoleOrganizer}
+	future := time.Now().UTC().Add(48 * time.Hour)
+
+	ev1, err := svc.CreateEvent(ctx, org1, service.CreateEventInput{
+		Title: "Org1 Event", Venue: "Hall 1", EventDate: future,
+		TicketTypes: []service.CreateTierInput{
+			{Name: "Reguler", PriceIDR: 100000, TotalQuota: 50},
+			{Name: "VIP", PriceIDR: 250000, TotalQuota: 20},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent org1 failed: %v", err)
+	}
+	_, err = svc.CreateEvent(ctx, org2, service.CreateEventInput{
+		Title: "Org2 Event", Venue: "Hall 2", EventDate: future,
+		TicketTypes: []service.CreateTierInput{
+			{Name: "Reguler", PriceIDR: 100000, TotalQuota: 30},
+			{Name: "VIP", PriceIDR: 200000, TotalQuota: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent org2 failed: %v", err)
+	}
+
+	org1List, err := svc.ListOrganizerEvents(ctx, org1)
+	if err != nil || len(org1List) != 1 || org1List[0].ID != ev1.ID {
+		t.Fatalf("ListOrganizerEvents org1 = (%+v, %v), want only ev1", org1List, err)
+	}
+
+	// Simulate 5 tickets held/sold on Reguler tier.
+	regID := ev1.TicketTypes[0].ID
+	vipID := ev1.TicketTypes[1].ID
+	evRepo.mu.Lock()
+	evRepo.tiers[regID].RemainingQuota = 45
+	evRepo.tierHasOrders[regID] = true
+	evRepo.eventHasOrders[ev1.ID] = true
+	evRepo.mu.Unlock()
+
+	// Shrinking quota below soldOrHeld (5) fails with QUOTA_CONFLICT.
+	_, err = svc.UpdateEvent(ctx, org1, ev1.ID, service.UpdateEventInput{
+		Title: "Org1 Updated", Venue: "Hall 1B", EventDate: future,
+		TicketTypes: []service.UpdateTierInput{
+			{ID: &regID, Name: "Reguler", PriceIDR: 100000, TotalQuota: 4},
+			{ID: &vipID, Name: "VIP", PriceIDR: 250000, TotalQuota: 20},
+		},
+	})
+	assertDomainErr(t, err, http.StatusConflict, domain.ErrCodeQuotaConflict)
+
+	// Removing tier with orders fails with TIER_HAS_ORDERS.
+	_, err = svc.UpdateEvent(ctx, org1, ev1.ID, service.UpdateEventInput{
+		Title: "Org1 Updated", Venue: "Hall 1B", EventDate: future,
+		TicketTypes: []service.UpdateTierInput{
+			{ID: &vipID, Name: "VIP", PriceIDR: 250000, TotalQuota: 20},
+			{Name: "VVIP", PriceIDR: 500000, TotalQuota: 10},
+		},
+	})
+	assertDomainErr(t, err, http.StatusConflict, domain.ErrCodeTierHasOrders)
+
+	// Successful update keeps Reguler (recomputing remaining = 60 - 5 = 55), removes unused VIP, adds VVIP.
+	updated, err := svc.UpdateEvent(ctx, org1, ev1.ID, service.UpdateEventInput{
+		Title: "Org1 Updated", Venue: "Hall 1B", EventDate: future,
+		TicketTypes: []service.UpdateTierInput{
+			{ID: &regID, Name: "Reguler Plus", PriceIDR: 120000, TotalQuota: 60},
+			{Name: "VVIP", PriceIDR: 500000, TotalQuota: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateEvent failed: %v", err)
+	}
+	if updated.Title != "Org1 Updated" || updated.TicketTypes[0].RemainingQuota != 55 || updated.TicketTypes[1].RemainingQuota != 10 {
+		t.Fatalf("unexpected updated event: %+v", updated)
+	}
+
+	// Other organizer cannot update or delete.
+	_, err = svc.UpdateEvent(ctx, org2, ev1.ID, service.UpdateEventInput{
+		Title: "Hijack", Venue: "Hall", EventDate: future,
+		TicketTypes: []service.UpdateTierInput{
+			{ID: &regID, Name: "Reguler", PriceIDR: 100, TotalQuota: 60},
+			{Name: "VVIP", PriceIDR: 200, TotalQuota: 10},
+		},
+	})
+	assertDomainErr(t, err, http.StatusForbidden, domain.ErrCodeForbidden)
+	assertDomainErr(t, svc.DeleteEvent(ctx, org2, ev1.ID), http.StatusForbidden, domain.ErrCodeForbidden)
+
+	// Deleting event with orders returns EVENT_HAS_ORDERS.
+	assertDomainErr(t, svc.DeleteEvent(ctx, org1, ev1.ID), http.StatusConflict, domain.ErrCodeEventHasOrders)
+
+	// Deleting unused event succeeds.
+	unused, err := svc.CreateEvent(ctx, org1, service.CreateEventInput{
+		Title: "Unused Event", Venue: "Hall C", EventDate: future,
+		TicketTypes: []service.CreateTierInput{
+			{Name: "A", PriceIDR: 50000, TotalQuota: 10},
+			{Name: "B", PriceIDR: 80000, TotalQuota: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEvent unused failed: %v", err)
+	}
+	if err := svc.DeleteEvent(ctx, org1, unused.ID); err != nil {
+		t.Fatalf("DeleteEvent unused failed: %v", err)
+	}
+	_, err = svc.GetEvent(ctx, unused.ID)
+	assertDomainErr(t, err, http.StatusNotFound, domain.ErrCodeEventNotFound)
 }
 
 func TestOrderService_GuardsAndValidation(t *testing.T) {

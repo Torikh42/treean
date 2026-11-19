@@ -14,7 +14,7 @@ const (
 	headerAllowMethods     = "Access-Control-Allow-Methods"
 	headerAllowHeaders     = "Access-Control-Allow-Headers"
 	headerMaxAge           = "Access-Control-Max-Age"
-	corsAllowedMethods     = "GET, POST, OPTIONS"
+	corsAllowedMethods     = "GET, POST, PUT, DELETE, OPTIONS"
 	corsAllowedHeaders     = "Content-Type, Authorization, X-User-ID, X-User-Role"
 	corsPreflightMaxAgeSec = "600"
 )

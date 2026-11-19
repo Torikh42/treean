@@ -11,7 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as FlashSaleRouteImport } from './routes/flash-sale'
+import { Route as ForbiddenRouteImport } from './routes/forbidden'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as OrganizerRouteImport } from './routes/organizer'
+import { Route as RegisterRouteImport } from './routes/register'
 import { Route as EventsEventIdRouteImport } from './routes/events.$eventId'
 import { Route as OrdersIndexRouteImport } from './routes/orders.index'
 import { Route as OrdersOrderIdRouteImport } from './routes/orders.$orderId'
@@ -26,9 +29,24 @@ const FlashSaleRoute = FlashSaleRouteImport.update({
   path: '/flash-sale',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ForbiddenRoute = ForbiddenRouteImport.update({
+  id: '/forbidden',
+  path: '/forbidden',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OrganizerRoute = OrganizerRouteImport.update({
   id: '/organizer',
   path: '/organizer',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RegisterRoute = RegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EventsEventIdRoute = EventsEventIdRouteImport.update({
@@ -50,7 +68,10 @@ const OrdersOrderIdRoute = OrdersOrderIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/flash-sale': typeof FlashSaleRoute
+  '/forbidden': typeof ForbiddenRoute
+  '/login': typeof LoginRoute
   '/organizer': typeof OrganizerRoute
+  '/register': typeof RegisterRoute
   '/events/$eventId': typeof EventsEventIdRoute
   '/orders/$orderId': typeof OrdersOrderIdRoute
   '/orders/': typeof OrdersIndexRoute
@@ -58,7 +79,10 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/flash-sale': typeof FlashSaleRoute
+  '/forbidden': typeof ForbiddenRoute
+  '/login': typeof LoginRoute
   '/organizer': typeof OrganizerRoute
+  '/register': typeof RegisterRoute
   '/events/$eventId': typeof EventsEventIdRoute
   '/orders/$orderId': typeof OrdersOrderIdRoute
   '/orders': typeof OrdersIndexRoute
@@ -67,7 +91,10 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/flash-sale': typeof FlashSaleRoute
+  '/forbidden': typeof ForbiddenRoute
+  '/login': typeof LoginRoute
   '/organizer': typeof OrganizerRoute
+  '/register': typeof RegisterRoute
   '/events/$eventId': typeof EventsEventIdRoute
   '/orders/$orderId': typeof OrdersOrderIdRoute
   '/orders/': typeof OrdersIndexRoute
@@ -77,7 +104,10 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/flash-sale'
+    | '/forbidden'
+    | '/login'
     | '/organizer'
+    | '/register'
     | '/events/$eventId'
     | '/orders/$orderId'
     | '/orders/'
@@ -85,7 +115,10 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/flash-sale'
+    | '/forbidden'
+    | '/login'
     | '/organizer'
+    | '/register'
     | '/events/$eventId'
     | '/orders/$orderId'
     | '/orders'
@@ -93,7 +126,10 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/flash-sale'
+    | '/forbidden'
+    | '/login'
     | '/organizer'
+    | '/register'
     | '/events/$eventId'
     | '/orders/$orderId'
     | '/orders/'
@@ -102,7 +138,10 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   FlashSaleRoute: typeof FlashSaleRoute
+  ForbiddenRoute: typeof ForbiddenRoute
+  LoginRoute: typeof LoginRoute
   OrganizerRoute: typeof OrganizerRoute
+  RegisterRoute: typeof RegisterRoute
   EventsEventIdRoute: typeof EventsEventIdRoute
   OrdersOrderIdRoute: typeof OrdersOrderIdRoute
   OrdersIndexRoute: typeof OrdersIndexRoute
@@ -124,11 +163,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FlashSaleRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/forbidden': {
+      id: '/forbidden'
+      path: '/forbidden'
+      fullPath: '/forbidden'
+      preLoaderRoute: typeof ForbiddenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/organizer': {
       id: '/organizer'
       path: '/organizer'
       fullPath: '/organizer'
       preLoaderRoute: typeof OrganizerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/register': {
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/events/$eventId': {
@@ -158,7 +218,10 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   FlashSaleRoute: FlashSaleRoute,
+  ForbiddenRoute: ForbiddenRoute,
+  LoginRoute: LoginRoute,
   OrganizerRoute: OrganizerRoute,
+  RegisterRoute: RegisterRoute,
   EventsEventIdRoute: EventsEventIdRoute,
   OrdersOrderIdRoute: OrdersOrderIdRoute,
   OrdersIndexRoute: OrdersIndexRoute,

@@ -3,8 +3,8 @@
 import { queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { cancelOrder, createEvent, createOrder, demoFlashSale, getEvent, getOrder, listEvents, listMyOrders, loginUser, type Options, paymentWebhook, payOrderDemo, registerUser } from '../sdk.gen';
-import type { CancelOrderData, CancelOrderError, CancelOrderResponse, CreateEventData, CreateEventError, CreateEventResponse, CreateOrderData, CreateOrderError, CreateOrderResponse, DemoFlashSaleData, DemoFlashSaleError, DemoFlashSaleResponse, GetEventData, GetEventError, GetEventResponse, GetOrderData, GetOrderError, GetOrderResponse, ListEventsData, ListEventsError, ListEventsResponse, ListMyOrdersData, ListMyOrdersError, ListMyOrdersResponse, LoginUserData, LoginUserError, LoginUserResponse, PaymentWebhookData, PaymentWebhookError, PaymentWebhookResponse, PayOrderDemoData, PayOrderDemoError, PayOrderDemoResponse, RegisterUserData, RegisterUserError, RegisterUserResponse } from '../types.gen';
+import { cancelOrder, createEvent, createOrder, deleteEvent, demoFlashSale, getEvent, getMe, getOrder, listEvents, listMyOrders, listOrganizerEvents, loginUser, type Options, paymentWebhook, payOrderDemo, registerUser, updateEvent } from '../sdk.gen';
+import type { CancelOrderData, CancelOrderError, CancelOrderResponse, CreateEventData, CreateEventError, CreateEventResponse, CreateOrderData, CreateOrderError, CreateOrderResponse, DeleteEventData, DeleteEventError, DeleteEventResponse, DemoFlashSaleData, DemoFlashSaleError, DemoFlashSaleResponse, GetEventData, GetEventError, GetEventResponse, GetMeData, GetMeError, GetMeResponse, GetOrderData, GetOrderError, GetOrderResponse, ListEventsData, ListEventsError, ListEventsResponse, ListMyOrdersData, ListMyOrdersError, ListMyOrdersResponse, ListOrganizerEventsData, ListOrganizerEventsError, ListOrganizerEventsResponse, LoginUserData, LoginUserError, LoginUserResponse, PaymentWebhookData, PaymentWebhookError, PaymentWebhookResponse, PayOrderDemoData, PayOrderDemoError, PayOrderDemoResponse, RegisterUserData, RegisterUserError, RegisterUserResponse, UpdateEventData, UpdateEventError, UpdateEventResponse } from '../types.gen';
 
 /**
  * Login with email and password to receive a Bearer JWT
@@ -13,40 +13,6 @@ export const loginUserMutation = (options?: Partial<Options<LoginUserData>>): Us
     const mutationOptions: UseMutationOptions<LoginUserResponse, LoginUserError, Options<LoginUserData>> = {
         mutationFn: async (fnOptions) => {
             const { data } = await loginUser({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-/**
- * Register an organizer or buyer account
- */
-export const registerUserMutation = (options?: Partial<Options<RegisterUserData>>): UseMutationOptions<RegisterUserResponse, RegisterUserError, Options<RegisterUserData>> => {
-    const mutationOptions: UseMutationOptions<RegisterUserResponse, RegisterUserError, Options<RegisterUserData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await registerUser({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
-};
-
-/**
- * Execute concurrent buyer spike benchmark (default: 200 requests vs 100 quota)
- */
-export const demoFlashSaleMutation = (options?: Partial<Options<DemoFlashSaleData>>): UseMutationOptions<DemoFlashSaleResponse, DemoFlashSaleError, Options<DemoFlashSaleData>> => {
-    const mutationOptions: UseMutationOptions<DemoFlashSaleResponse, DemoFlashSaleError, Options<DemoFlashSaleData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await demoFlashSale({
                 ...options,
                 ...fnOptions,
                 throwOnError: true
@@ -90,6 +56,58 @@ const createQueryKey = <TOptions extends Options>(id: string, options?: TOptions
     return [params];
 };
 
+export const getMeQueryKey = (options?: Options<GetMeData>) => createQueryKey('getMe', options);
+
+/**
+ * Get authenticated user profile
+ */
+export const getMeOptions = (options?: Options<GetMeData>) => queryOptions<GetMeResponse, GetMeError, GetMeResponse, ReturnType<typeof getMeQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await getMe({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: getMeQueryKey(options)
+});
+
+/**
+ * Register an organizer or buyer account
+ */
+export const registerUserMutation = (options?: Partial<Options<RegisterUserData>>): UseMutationOptions<RegisterUserResponse, RegisterUserError, Options<RegisterUserData>> => {
+    const mutationOptions: UseMutationOptions<RegisterUserResponse, RegisterUserError, Options<RegisterUserData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await registerUser({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Execute concurrent buyer spike benchmark (default: 200 requests vs 100 quota)
+ */
+export const demoFlashSaleMutation = (options?: Partial<Options<DemoFlashSaleData>>): UseMutationOptions<DemoFlashSaleResponse, DemoFlashSaleError, Options<DemoFlashSaleData>> => {
+    const mutationOptions: UseMutationOptions<DemoFlashSaleResponse, DemoFlashSaleError, Options<DemoFlashSaleData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await demoFlashSale({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const listEventsQueryKey = (options?: Options<ListEventsData>) => createQueryKey('listEvents', options);
 
 /**
@@ -125,6 +143,23 @@ export const createEventMutation = (options?: Partial<Options<CreateEventData>>)
     return mutationOptions;
 };
 
+/**
+ * Delete an unused event with no orders (Owner organizer only)
+ */
+export const deleteEventMutation = (options?: Partial<Options<DeleteEventData>>): UseMutationOptions<DeleteEventResponse, DeleteEventError, Options<DeleteEventData>> => {
+    const mutationOptions: UseMutationOptions<DeleteEventResponse, DeleteEventError, Options<DeleteEventData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await deleteEvent({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const getEventQueryKey = (options: Options<GetEventData>) => createQueryKey('getEvent', options);
 
 /**
@@ -142,6 +177,23 @@ export const getEventOptions = (options: Options<GetEventData>) => queryOptions<
     },
     queryKey: getEventQueryKey(options)
 });
+
+/**
+ * Update an event and its ticket tiers (Owner organizer only)
+ */
+export const updateEventMutation = (options?: Partial<Options<UpdateEventData>>): UseMutationOptions<UpdateEventResponse, UpdateEventError, Options<UpdateEventData>> => {
+    const mutationOptions: UseMutationOptions<UpdateEventResponse, UpdateEventError, Options<UpdateEventData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await updateEvent({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
 
 export const listMyOrdersQueryKey = (options?: Options<ListMyOrdersData>) => createQueryKey('listMyOrders', options);
 
@@ -229,6 +281,24 @@ export const payOrderDemoMutation = (options?: Partial<Options<PayOrderDemoData>
     };
     return mutationOptions;
 };
+
+export const listOrganizerEventsQueryKey = (options?: Options<ListOrganizerEventsData>) => createQueryKey('listOrganizerEvents', options);
+
+/**
+ * List events owned by the authenticated organizer
+ */
+export const listOrganizerEventsOptions = (options?: Options<ListOrganizerEventsData>) => queryOptions<ListOrganizerEventsResponse, ListOrganizerEventsError, ListOrganizerEventsResponse, ReturnType<typeof listOrganizerEventsQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await listOrganizerEvents({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: listOrganizerEventsQueryKey(options)
+});
 
 /**
  * Idempotent SHA-512 signed payment webhook (handles duplicates and post-expiry late captures)
