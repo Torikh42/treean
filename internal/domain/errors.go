@@ -18,12 +18,12 @@ const (
 	ErrCodeForbidden             = "FORBIDDEN"
 	ErrCodeUnauthorized          = "UNAUTHORIZED"
 	ErrCodeEmailAlreadyExists    = "EMAIL_ALREADY_EXISTS"
-	ErrCodeInvalidCredentials    = "INVALID_CREDENTIALS"
+	ErrCodeInvalidCredentials    = "INVALID_CREDENTIALS" //nolint:gosec // G101 false positive: public machine error code constant, not a secret.
 	ErrCodeValidation            = "VALIDATION_ERROR"
 )
 
 // DomainError carries an HTTP status code, stable machine code, and client-safe message.
-type DomainError struct {
+type DomainError struct { //nolint:revive // Explicit DomainError name prevents shadowing Go's built-in error interface.
 	Code       string
 	HTTPStatus int
 	Message    string

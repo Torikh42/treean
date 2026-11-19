@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -148,7 +147,7 @@ func TestExpirySweeper_StopsGracefullyOnCancel(t *testing.T) {
 			}
 		},
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	sweeper := worker.NewExpirySweeper(store, logger, 10*time.Millisecond, 50)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -323,7 +322,7 @@ func TestExpirySweeper_DefensiveGuardsAndDefaults(t *testing.T) {
 	t.Run("nil store is safe", func(t *testing.T) {
 		t.Parallel()
 
-		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		logger := slog.New(slog.DiscardHandler)
 		sweeper := worker.NewExpirySweeper(nil, logger, 10*time.Millisecond, 10)
 		sweeper.Start(t.Context())
 		sweeper.RunOnce(t.Context())

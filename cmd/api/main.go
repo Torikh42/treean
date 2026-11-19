@@ -177,8 +177,8 @@ func serveWithGracefulShutdown(
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		closeErr := srv.Close()
-		<-errCh
-		return fmt.Errorf("shutting down http server: %w", errors.Join(err, closeErr))
+		serveErr := <-errCh
+		return fmt.Errorf("shutting down http server: %w", errors.Join(err, closeErr, serveErr))
 	}
 
 	if serveErr, ok := <-errCh; ok && serveErr != nil {

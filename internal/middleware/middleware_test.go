@@ -595,137 +595,133 @@ func assertDemoRepoErrorLog(t *testing.T, ensureErr error, body, logs string) {
 	}
 }
 
-func TestCORS(t *testing.T) {
+func TestCORS_AllowsTrimmedOriginOnGET(t *testing.T) {
 	t.Parallel()
 
-	t.Run("allows trimmed exact origin on GET and sets Vary without credentials", func(t *testing.T) {
-		t.Parallel()
+	called := false
+	h := middleware.CORS([]string{" http://localhost:5173 ", "", "http://localhost:3000"})(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
 
-		called := false
-		h := middleware.CORS([]string{" http://localhost:5173 ", "", "http://localhost:3000"})(
-			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				called = true
-				w.WriteHeader(http.StatusOK)
-			}),
-		)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events", nil)
-		req.Header.Set("Origin", "http://localhost:5173")
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
+	if !called || rec.Code != http.StatusOK {
+		t.Fatalf("called=%v status=%d, want true and 200", called, rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "http://localhost:5173")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", got)
+	}
+	wantVary := []string{"Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"}
+	if got := rec.Header().Values("Vary"); !slices.Equal(got, wantVary) {
+		t.Fatalf("Vary = %v, want %v", got, wantVary)
+	}
+}
 
-		if !called || rec.Code != http.StatusOK {
-			t.Fatalf("called=%v status=%d, want true and 200", called, rec.Code)
-		}
-		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
-			t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "http://localhost:5173")
-		}
-		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
-			t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", got)
-		}
-		wantVary := []string{"Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"}
-		if got := rec.Header().Values("Vary"); !slices.Equal(got, wantVary) {
-			t.Fatalf("Vary = %v, want %v", got, wantVary)
-		}
-	})
+func TestCORS_HandlesOptionsPreflight(t *testing.T) {
+	t.Parallel()
 
-	t.Run("responds 204 on OPTIONS preflight without calling next", func(t *testing.T) {
-		t.Parallel()
+	called := false
+	h := middleware.CORS([]string{"http://localhost:5173"})(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			called = true
+		}),
+	)
 
-		called := false
-		h := middleware.CORS([]string{"http://localhost:5173"})(
-			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-				called = true
-			}),
-		)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/orders", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type, Authorization")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/orders", nil)
-		req.Header.Set("Origin", "http://localhost:5173")
-		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
-		req.Header.Set("Access-Control-Request-Headers", "Content-Type, Authorization")
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
+	if called {
+		t.Fatal("expected OPTIONS preflight not to invoke next handler")
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "http://localhost:5173")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, OPTIONS" {
+		t.Fatalf("Access-Control-Allow-Methods = %q, want %q", got, "GET, POST, OPTIONS")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role" {
+		t.Fatalf("Access-Control-Allow-Headers = %q, want %q", got, "Content-Type, Authorization, X-User-ID, X-User-Role")
+	}
+	if got := rec.Header().Get("Access-Control-Max-Age"); got != "600" {
+		t.Fatalf("Access-Control-Max-Age = %q, want 600", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", got)
+	}
+}
 
-		if called {
-			t.Fatal("expected OPTIONS preflight not to invoke next handler")
-		}
-		if rec.Code != http.StatusNoContent {
-			t.Fatalf("status = %d, want 204", rec.Code)
-		}
-		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
-			t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "http://localhost:5173")
-		}
-		if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, OPTIONS" {
-			t.Fatalf("Access-Control-Allow-Methods = %q, want %q", got, "GET, POST, OPTIONS")
-		}
-		if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role" {
-			t.Fatalf("Access-Control-Allow-Headers = %q, want %q", got, "Content-Type, Authorization, X-User-ID, X-User-Role")
-		}
-		if got := rec.Header().Get("Access-Control-Max-Age"); got != "600" {
-			t.Fatalf("Access-Control-Max-Age = %q, want 600", got)
-		}
-		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
-			t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", got)
-		}
-	})
+func TestCORS_SupportsWildcardOrigin(t *testing.T) {
+	t.Parallel()
 
-	t.Run("supports wildcard origin without credentials", func(t *testing.T) {
-		t.Parallel()
+	h := middleware.CORS([]string{"*"})(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
 
-		h := middleware.CORS([]string{"*"})(
-			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			}),
-		)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
+	req.Header.Set("Origin", "https://any.example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
-		req.Header.Set("Origin", "https://any.example.com")
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want *", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", got)
+	}
+}
 
-		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
-			t.Fatalf("Access-Control-Allow-Origin = %q, want *", got)
-		}
-		if got := rec.Header().Get("Access-Control-Allow-Credentials"); got != "" {
-			t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", got)
-		}
-	})
+func TestCORS_RejectsDisallowedOrigin(t *testing.T) {
+	t.Parallel()
 
-	t.Run("does not leak ACAO for disallowed origin on GET or OPTIONS", func(t *testing.T) {
-		t.Parallel()
+	called := false
+	h := middleware.CORS([]string{"http://localhost:5173"})(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
 
-		called := false
-		h := middleware.CORS([]string{"http://localhost:5173"})(
-			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				called = true
-				w.WriteHeader(http.StatusOK)
-			}),
-		)
+	getReq := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
+	getReq.Header.Set("Origin", "https://evil.example.com")
+	getRec := httptest.NewRecorder()
+	h.ServeHTTP(getRec, getReq)
+	if !called || getRec.Code != http.StatusOK {
+		t.Fatalf("GET disallowed origin: called=%v status=%d, want true and 200", called, getRec.Code)
+	}
+	if got := getRec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected empty ACAO for disallowed GET origin, got %q", got)
+	}
 
-		getReq := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
-		getReq.Header.Set("Origin", "https://evil.example.com")
-		getRec := httptest.NewRecorder()
-		h.ServeHTTP(getRec, getReq)
-		if !called || getRec.Code != http.StatusOK {
-			t.Fatalf("GET disallowed origin: called=%v status=%d, want true and 200", called, getRec.Code)
-		}
-		if got := getRec.Header().Get("Access-Control-Allow-Origin"); got != "" {
-			t.Fatalf("expected empty ACAO for disallowed GET origin, got %q", got)
-		}
-
-		called = false
-		optReq := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/orders", nil)
-		optReq.Header.Set("Origin", "https://evil.example.com")
-		optRec := httptest.NewRecorder()
-		h.ServeHTTP(optRec, optReq)
-		if called {
-			t.Fatal("expected disallowed OPTIONS preflight not to invoke next")
-		}
-		if optRec.Code != http.StatusNoContent {
-			t.Fatalf("OPTIONS disallowed origin status = %d, want 204", optRec.Code)
-		}
-		if got := optRec.Header().Get("Access-Control-Allow-Origin"); got != "" {
-			t.Fatalf("expected empty ACAO for disallowed OPTIONS origin, got %q", got)
-		}
-	})
+	called = false
+	optReq := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/orders", nil)
+	optReq.Header.Set("Origin", "https://evil.example.com")
+	optRec := httptest.NewRecorder()
+	h.ServeHTTP(optRec, optReq)
+	if called {
+		t.Fatal("expected disallowed OPTIONS preflight not to invoke next")
+	}
+	if optRec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS disallowed origin status = %d, want 204", optRec.Code)
+	}
+	if got := optRec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected empty ACAO for disallowed OPTIONS origin, got %q", got)
+	}
 }

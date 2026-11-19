@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b --noEmit",
     "lint": "oxlint src",
     "test": "vitest run",
     "openapi:generate": "openapi-ts -f openapi-ts.config.ts"
@@ -33,6 +33,7 @@
     "@tanstack/react-router-devtools": "^1.120.0",
     "@tanstack/router-plugin": "^1.120.0",
     "@testing-library/react": "^16.3.0",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.5.0",

@@ -15,12 +15,13 @@ import (
 
 type ctxKey string
 
+const actorContextKey ctxKey = "auth_actor"
+
 const (
-	actorContextKey     ctxKey = "auth_actor"
-	bearerPrefix               = "bearer "
-	demoActorEmail             = "demo@event.local"
-	headerContentType          = "Content-Type"
-	mimeApplicationJSON        = "application/json"
+	bearerPrefix        = "bearer "
+	demoActorEmail      = "demo@event.local"
+	headerContentType   = "Content-Type"
+	mimeApplicationJSON = "application/json"
 )
 
 // Authenticator verifies bearer JWT tokens and provisions opt-in demo accounts.

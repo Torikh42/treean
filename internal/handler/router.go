@@ -52,7 +52,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.RequestID)
-	r.Use(chiMiddleware.RealIP)
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.Recoverer(logger))
 	r.Use(middleware.CORS(allowedOrigins))

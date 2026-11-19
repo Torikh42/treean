@@ -1,4 +1,5 @@
 .git
+.github/
 .env
 .env.*
 bin/
@@ -6,5 +7,6 @@ coverage.out
 docs/
 specs/
 frontend/
+*.md
 *.exe
 *.test

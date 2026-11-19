@@ -93,7 +93,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("applying migrations: %v", err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	userRepo := repository.NewUserRepo(pool)
 	eventRepo := repository.NewEventRepo(pool)
 	orderRepo := repository.NewOrderRepo(pool)

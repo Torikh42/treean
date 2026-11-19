@@ -443,7 +443,7 @@ func newTestHarness(allowDemo bool) *testHarness {
 	demoSvc := service.NewDemoService(users, events, orderSvc)
 
 	r := handler.NewRouter(handler.RouterDeps{
-		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:              slog.New(slog.DiscardHandler),
 		DB:                  pinger,
 		AuthService:         authSvc,
 		EventService:        eventSvc,

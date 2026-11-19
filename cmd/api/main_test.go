@@ -32,7 +32,7 @@ func TestSafeLogger_HandlesNilAndPreservesProvided(t *testing.T) {
 		t.Fatal("safeLogger(nil) returned nil")
 	}
 
-	provided := slog.New(slog.NewTextHandler(io.Discard, nil))
+	provided := slog.New(slog.DiscardHandler)
 	if safeLogger(provided) != provided {
 		t.Fatal("safeLogger did not preserve non-nil logger")
 	}

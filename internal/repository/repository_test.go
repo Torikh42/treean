@@ -441,7 +441,7 @@ func TestNewPool_GuardsAndMalformedDSN(t *testing.T) {
 	}{
 		{name: "empty dsn", dsn: ""},
 		{name: "whitespace dsn", dsn: "   \t\n  "},
-		{name: "missing scheme before colon slash slash", dsn: "://bad-dsn"},
+		{name: "missing scheme before separator", dsn: "://bad-dsn"},
 		{name: "invalid percent escape with password", dsn: "postgres://user:" + secretPassword + "@%zz:5432/db"},
 		{name: "unclosed ipv6 bracket with password", dsn: "postgres://user:" + secretPassword + "@[::1:5432/db"},
 		{name: "invalid pool max conns param with password", dsn: "postgres://user:" + secretPassword + "@localhost:5432/db?pool_max_conns=notanint"},
