@@ -11,7 +11,7 @@ import {
   updateEventMutation,
 } from "@/lib/api/generated/@tanstack/react-query.gen";
 import type { Event } from "@/lib/api/generated/types.gen";
-import { parseApiError, type ParsedApiError } from "@/lib/api/errors";
+import { toastApiError, type ParsedApiError } from "@/lib/api/errors";
 import {
   buildCreateEventBody,
   buildUpdateEventBody,
@@ -87,9 +87,7 @@ export function useOrganizerConsole() {
       toast.success(`Published "${created.title}"`);
     },
     onError: (err) => {
-      const parsed = parseApiError(err);
-      setSubmitError(parsed);
-      toast.error(`${parsed.code}: ${parsed.detail}`);
+      setSubmitError(toastApiError(err));
     },
   });
 
@@ -105,9 +103,7 @@ export function useOrganizerConsole() {
       toast.success(`Updated "${updated.title}"`);
     },
     onError: (err) => {
-      const parsed = parseApiError(err);
-      setSubmitError(parsed);
-      toast.error(`${parsed.code}: ${parsed.detail}`);
+      setSubmitError(toastApiError(err));
     },
   });
 
@@ -128,13 +124,12 @@ export function useOrganizerConsole() {
       toast.success("Deleted unused event");
     },
     onError: (err, variables) => {
-      const parsed = parseApiError(err);
+      const parsed = toastApiError(err);
       setDeleteConfirmId(null);
       setDeleteError({
         eventId: variables.path.id,
         error: parsed,
       });
-      toast.error(`${parsed.code}: ${parsed.detail}`);
     },
   });
 

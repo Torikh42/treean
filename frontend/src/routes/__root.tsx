@@ -3,6 +3,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, Link, Outlet } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 import { AppShell } from "@/components/layout/AppShell";
+import { RouteErrorView } from "@/components/ui/RouteErrorView";
 import { useSessionSync } from "@/hooks/useSessionSync";
 import { TanStackQueryProvider } from "@/integrations/tanstack-query/root-provider";
 import "../index.css";
@@ -13,6 +14,7 @@ interface RouterContext {
 
 export const Route = createRootRouteWithContext<RouterContext>()({
   component: RootLayout,
+  errorComponent: RouteErrorView,
   notFoundComponent: NotFoundView,
 });
 
