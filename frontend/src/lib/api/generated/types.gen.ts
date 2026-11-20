@@ -141,6 +141,7 @@ export type Order = {
     expired_at?: string;
     expires_at: string;
     id: string;
+    idempotency_key?: string;
     invoice_number: string;
     items?: Array<OrderItem> | null;
     logs?: Array<OrderLog> | null;
@@ -362,6 +363,7 @@ export type OrderWritable = {
     expired_at?: string;
     expires_at: string;
     id: string;
+    idempotency_key?: string;
     invoice_number: string;
     items?: Array<OrderItem> | null;
     logs?: Array<OrderLog> | null;
@@ -683,6 +685,12 @@ export type ListMyOrdersResponse = ListMyOrdersResponses[keyof ListMyOrdersRespo
 
 export type CreateOrderData = {
     body: CreateOrderBodyWritable;
+    headers?: {
+        /**
+         * Optional unique key preventing duplicate order creation on retries
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/api/v1/orders';

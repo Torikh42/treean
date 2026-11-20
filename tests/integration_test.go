@@ -19,9 +19,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/torikh42/treean/internal/config"
 	"github.com/torikh42/treean/internal/domain"
 	"github.com/torikh42/treean/internal/handler"
+	"github.com/torikh42/treean/internal/middleware"
+	"github.com/torikh42/treean/internal/redisstore"
 	"github.com/torikh42/treean/internal/repository"
 	"github.com/torikh42/treean/internal/routes"
 	"github.com/torikh42/treean/internal/service"
@@ -39,10 +42,12 @@ const (
 )
 
 type testEnv struct {
-	pool    *pgxpool.Pool
-	server  *httptest.Server
-	client  *http.Client
-	sweeper *worker.ExpirySweeper
+	pool        *pgxpool.Pool
+	server      *httptest.Server
+	client      *http.Client
+	sweeper     *worker.ExpirySweeper
+	redisRaw    *redis.Client
+	redisClient *redisstore.Client
 }
 
 type concurrentRequestSpec struct {
@@ -65,14 +70,23 @@ type webhookAuditRow struct {
 
 func setupTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+	return setupTestEnvWithRateLimit(t, middleware.RateLimitPolicy{Enabled: false}, 0)
+}
+
+func setupTestEnvWithRateLimit(t *testing.T, policy middleware.RateLimitPolicy, loginAcctMax int) *testEnv {
+	t.Helper()
 
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		dbURL = defaultTestDBURL
 	}
+	redisURL := os.Getenv("REDIS_URL")
 
 	cfg := config.Config{
 		DatabaseURL:         dbURL,
+		RedisURL:            redisURL,
+		RedisTimeout:        500 * time.Millisecond,
+		EventCacheTTL:       3 * time.Second,
 		JWTSecret:           "integration-jwt-secret",
 		WebhookSecret:       testWebhookSecret,
 		AllowDemoHeaderAuth: true,
@@ -95,6 +109,21 @@ func setupTestEnv(t *testing.T) *testEnv {
 	}
 
 	logger := slog.New(slog.DiscardHandler)
+	var redisRaw *redis.Client
+	var redisStore *redisstore.Client
+	if redisURL != "" {
+		opts, parseErr := redis.ParseURL(redisURL)
+		if parseErr != nil {
+			t.Fatalf("parsing test REDIS_URL: %v", parseErr)
+		}
+		redisRaw = redis.NewClient(opts)
+		t.Cleanup(func() { _ = redisRaw.Close() })
+		if err := redisRaw.FlushDB(ctx).Err(); err != nil {
+			t.Fatalf("flushing test Redis DB: %v", err)
+		}
+		redisStore = redisstore.NewClientFromGoRedis(redisRaw, cfg.RedisTimeout, logger)
+	}
+
 	userRepo := repository.NewUserRepo(pool)
 	eventRepo := repository.NewEventRepo(pool)
 	orderRepo := repository.NewOrderRepo(pool)
@@ -104,6 +133,20 @@ func setupTestEnv(t *testing.T) *testEnv {
 	eventSvc := service.NewEventService(eventRepo, orderRepo)
 	orderSvc := service.NewOrderService(orderRepo, eventRepo)
 	paymentSvc := service.NewPaymentService(orderRepo, webhookRepo, eventRepo, cfg.WebhookSecret)
+	sweeper := worker.NewExpirySweeper(orderRepo, logger, time.Second, 50)
+	var limiter middleware.RateLimiter
+	if redisStore != nil {
+		eventSvc.WithCache(redisStore, cfg.EventCacheTTL)
+		orderSvc.WithCache(redisStore)
+		paymentSvc.WithCache(redisStore)
+		sweeper.WithCache(redisStore)
+		if policy.Enabled {
+			limiter = redisStore
+			if loginAcctMax > 0 {
+				authSvc.WithLoginRateLimiter(redisStore, loginAcctMax)
+			}
+		}
+	}
 	demoSvc := service.NewDemoService(userRepo, eventRepo, orderSvc)
 
 	r := routes.NewRouter(routes.RouterDeps{
@@ -115,6 +158,8 @@ func setupTestEnv(t *testing.T) *testEnv {
 		Orders:              handler.NewOrderHandler(orderSvc, logger),
 		Webhooks:            handler.NewWebhookHandler(paymentSvc, logger),
 		Demo:                handler.NewDemoHandler(demoSvc, logger),
+		RateLimiter:         limiter,
+		RateLimitPolicy:     policy,
 		AllowDemoHeaderAuth: true,
 	})
 	srv := httptest.NewServer(r)
@@ -127,10 +172,12 @@ func setupTestEnv(t *testing.T) *testEnv {
 	t.Cleanup(transport.CloseIdleConnections)
 
 	return &testEnv{
-		pool:    pool,
-		server:  srv,
-		client:  &http.Client{Timeout: 30 * time.Second, Transport: transport},
-		sweeper: worker.NewExpirySweeper(orderRepo, logger, time.Second, 50),
+		pool:        pool,
+		server:      srv,
+		client:      &http.Client{Timeout: 30 * time.Second, Transport: transport},
+		sweeper:     sweeper,
+		redisRaw:    redisRaw,
+		redisClient: redisStore,
 	}
 }
 
@@ -1091,4 +1138,143 @@ func TestIntegration_OrganizerEventDelete(t *testing.T) {
 
 	getGoneStatus, getGoneRaw := mustJSON(t, env, "/api/v1/events/"+unusedEv.ID.String(), http.MethodGet, nil, nil)
 	assertAPIError(t, getGoneStatus, getGoneRaw, http.StatusNotFound, domain.ErrCodeEventNotFound)
+}
+
+func TestIntegration_OrderIdempotencyKey_ConcurrentReplay(t *testing.T) {
+	env := setupTestEnv(t)
+
+	buyerID := uuid.NewString()
+	ev := createTestEvent(t, env, 2, 10)
+	regTier := findTierByName(t, ev, "Reguler")
+	idempKey := "checkout-idemp-" + uuid.NewString()
+
+	specs := make([]concurrentRequestSpec, 5)
+	for i := range specs {
+		headers := roleHeaders(buyerID, roleBuyer)
+		headers["Idempotency-Key"] = idempKey
+		specs[i] = concurrentRequestSpec{
+			targetURL: env.server.URL + "/api/v1/orders",
+			method:    http.MethodPost,
+			body: map[string]any{
+				"event_id": ev.ID.String(),
+				"items": []map[string]any{
+					{"ticket_type_id": regTier.ID.String(), "quantity": 2},
+				},
+			},
+			headers: headers,
+		}
+	}
+	results := runConcurrentRequests(t.Context(), env.client, specs)
+	orderIDs := make(map[uuid.UUID]struct{})
+	for _, r := range results {
+		if r.err != nil {
+			t.Fatalf("concurrent idempotent order request error: %v", r.err)
+		}
+		if r.status != http.StatusCreated {
+			t.Fatalf("expected 201 on idempotent burst, got %d (%s)", r.status, string(r.raw))
+		}
+		ord := mustUnmarshal[domain.Order](t, r.raw)
+		orderIDs[ord.ID] = struct{}{}
+	}
+	if len(orderIDs) != 1 {
+		t.Fatalf("expected exactly 1 distinct order created for identical Idempotency-Key, got %d", len(orderIDs))
+	}
+
+	// Verify quota reached 0 (2 requested from 2 total) and repeating same key STILL replays 201 instead of 409.
+	updatedEv := fetchEvent(t, env, ev.ID)
+	if rem := findTierQuota(t, updatedEv, regTier.ID); rem != 0 {
+		t.Fatalf("expected Reguler quota=0 after single order, got %d", rem)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.server.URL+"/api/v1/orders", bytes.NewReader(mustMarshalJSON(t, specs[0].body)))
+	if err != nil {
+		t.Fatalf("build replay request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", buyerID)
+	req.Header.Set("X-User-Role", roleBuyer)
+	req.Header.Set("Idempotency-Key", idempKey)
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("execute replay request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated || resp.Header.Get("Idempotent-Replay") != "true" {
+		t.Fatalf("expected 201 + Idempotent-Replay: true, got status=%d header=%q", resp.StatusCode, resp.Header.Get("Idempotent-Replay"))
+	}
+}
+
+func TestIntegration_RateLimiting_And_EventCache_WithRedis(t *testing.T) {
+	if os.Getenv("REDIS_URL") == "" {
+		t.Skip("REDIS_URL not configured")
+	}
+
+	policy := middleware.RateLimitPolicy{
+		Enabled:          true,
+		RegisterMax:      2,
+		LoginIPMax:       20,
+		OrderUserMax:     2,
+		OrderIPMax:       20,
+		DemoFlashSaleMax: 2,
+	}
+	env := setupTestEnvWithRateLimit(t, policy, 2)
+
+	// 1. Register endpoint enforces strict IP rate limit (allows 2, blocks 3rd with 429 RATE_LIMITED).
+	for i := range 2 {
+		st, raw := mustJSON(t, env, "/api/v1/auth/register", http.MethodPost, map[string]any{
+			"email": fmt.Sprintf("rl-reg-%d-%s@event.local", i, uuid.NewString()[:8]), "name": "RL User",
+			"password": "password123", "role": roleBuyer,
+		}, nil)
+		if st != http.StatusCreated {
+			t.Fatalf("register %d status = %d, want 201 (%s)", i+1, st, string(raw))
+		}
+	}
+	st3, raw3 := mustJSON(t, env, "/api/v1/auth/register", http.MethodPost, map[string]any{
+		"email": "rl-reg-3@event.local", "name": "RL Blocked",
+		"password": "password123", "role": roleBuyer,
+	}, nil)
+	assertAPIError(t, st3, raw3, http.StatusTooManyRequests, domain.ErrCodeRateLimited)
+
+	// 2. Per-user checkout rate limiting blocks buyer1 on 3rd order while buyer2 on same IP succeeds.
+	buyer1Headers := roleHeaders(uuid.NewString(), roleBuyer)
+	buyer2Headers := roleHeaders(uuid.NewString(), roleBuyer)
+
+	ev := createTestEvent(t, env, 20, 10)
+	regTier := findTierByName(t, ev, "Reguler")
+	for range 2 {
+		_ = createOrder(t, env, buyer1Headers, ev.ID, []map[string]any{
+			{"ticket_type_id": regTier.ID.String(), "quantity": 1},
+		})
+	}
+	stB1, rawB1 := mustJSON(t, env, "/api/v1/orders", http.MethodPost, map[string]any{
+		"event_id": ev.ID.String(),
+		"items":    []map[string]any{{"ticket_type_id": regTier.ID.String(), "quantity": 1}},
+	}, buyer1Headers)
+	assertAPIError(t, stB1, rawB1, http.StatusTooManyRequests, domain.ErrCodeRateLimited)
+
+	ordB2 := createOrder(t, env, buyer2Headers, ev.ID, []map[string]any{
+		{"ticket_type_id": regTier.ID.String(), "quantity": 1},
+	})
+
+	// 3. Populate detail cache, then expire buyer2's order via ExpirySweeper and verify cache immediately invalidates.
+	cachedView := fetchEvent(t, env, ev.ID)
+	if rem := findTierQuota(t, cachedView, regTier.ID); rem != 17 {
+		t.Fatalf("expected cached remaining_quota=17, got %d", rem)
+	}
+	if _, err := env.pool.Exec(t.Context(), "UPDATE orders SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1", ordB2.ID); err != nil {
+		t.Fatalf("backdate expires_at: %v", err)
+	}
+	env.sweeper.RunOnce(t.Context())
+	afterSweep := fetchEvent(t, env, ev.ID)
+	if rem := findTierQuota(t, afterSweep, regTier.ID); rem != 18 {
+		t.Fatalf("expected invalidated event cache after sweep showing 18, got %d", rem)
+	}
+}
+
+func mustMarshalJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal json: %v", err)
+	}
+	return b
 }

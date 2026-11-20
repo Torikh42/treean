@@ -53,13 +53,24 @@ type UpdateEventInput struct {
 
 // EventService handles event management and real-time quota views.
 type EventService struct {
-	events EventRepository
-	orders OrderRepository
+	events   EventRepository
+	orders   OrderRepository
+	cache    EventCatalogCache
+	cacheTTL time.Duration
 }
 
 // NewEventService constructs an EventService.
 func NewEventService(events EventRepository, orders OrderRepository) *EventService {
 	return &EventService{events: events, orders: orders}
+}
+
+// WithCache attaches an optional fail-open EventCatalogCache for public catalog/detail queries.
+func (s *EventService) WithCache(cache EventCatalogCache, ttl time.Duration) *EventService {
+	if s != nil {
+		s.cache = cache
+		s.cacheTTL = ttl
+	}
+	return s
 }
 
 // CreateEvent enforces ORGANIZER role and minimum 2 distinct ticket tiers.
@@ -87,6 +98,7 @@ func (s *EventService) CreateEvent(ctx context.Context, actor domain.Actor, in C
 	if err := s.events.CreateWithTiers(ctx, ev); err != nil {
 		return nil, err
 	}
+	s.invalidateCache(ctx, ev.ID)
 	return ev, nil
 }
 
@@ -95,10 +107,22 @@ func (s *EventService) ListEvents(ctx context.Context) ([]domain.Event, error) {
 	if err := validateServiceCall(ctx, "listing events", s != nil && s.events != nil && s.orders != nil); err != nil {
 		return nil, err
 	}
-	if _, err := s.orders.ExpireDueOrders(ctx, nil, lazyExpiryBatchLimit, lazyExpiryActorType, time.Now().UTC()); err != nil {
+	if s.cache != nil {
+		if cached, hit := s.cache.GetEventsCatalog(ctx); hit {
+			return cached, nil
+		}
+	}
+	if err := s.expireAndInvalidate(ctx, nil); err != nil {
 		return nil, err
 	}
-	return s.events.ListAll(ctx)
+	evs, err := s.events.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.cache != nil {
+		s.cache.SetEventsCatalog(ctx, evs, s.cacheTTL)
+	}
+	return evs, nil
 }
 
 // ListOrganizerEvents sweeps due orders and returns events owned by the authenticated organizer.
@@ -123,10 +147,22 @@ func (s *EventService) GetEvent(ctx context.Context, eventID uuid.UUID) (*domain
 	if eventID == uuid.Nil {
 		return nil, domain.NewDomainError(http.StatusUnprocessableEntity, domain.ErrCodeValidation, "event_id is required")
 	}
-	if _, err := s.orders.ExpireDueOrders(ctx, &eventID, lazyExpiryBatchLimit, lazyExpiryActorType, time.Now().UTC()); err != nil {
+	if s.cache != nil {
+		if cached, hit := s.cache.GetEventDetail(ctx, eventID); hit {
+			return cached, nil
+		}
+	}
+	if err := s.expireAndInvalidate(ctx, &eventID); err != nil {
 		return nil, err
 	}
-	return s.events.FindByID(ctx, eventID)
+	ev, err := s.events.FindByID(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+	if s.cache != nil && ev != nil {
+		s.cache.SetEventDetail(ctx, ev, s.cacheTTL)
+	}
+	return ev, nil
 }
 
 // UpdateEvent enforces organizer ownership, validates metadata and tiers, and atomically updates the event.
@@ -148,6 +184,7 @@ func (s *EventService) UpdateEvent(ctx context.Context, actor domain.Actor, even
 	if err := s.events.UpdateWithTiers(ctx, actor.ID, ev); err != nil {
 		return nil, err
 	}
+	s.invalidateCache(ctx, eventID)
 	return ev, nil
 }
 
@@ -162,7 +199,43 @@ func (s *EventService) DeleteEvent(ctx context.Context, actor domain.Actor, even
 	if eventID == uuid.Nil {
 		return domain.NewDomainError(http.StatusUnprocessableEntity, domain.ErrCodeValidation, "event_id is required")
 	}
-	return s.events.DeleteUnused(ctx, actor.ID, eventID)
+	if err := s.events.DeleteUnused(ctx, actor.ID, eventID); err != nil {
+		return err
+	}
+	s.invalidateCache(ctx, eventID)
+	return nil
+}
+
+func (s *EventService) expireAndInvalidate(ctx context.Context, eventID *uuid.UUID) error {
+	nowUTC := time.Now().UTC()
+	if aware, ok := s.orders.(EventAwareExpiryStore); ok {
+		count, touchedEvents, err := aware.ExpireDueOrdersWithEvents(ctx, eventID, lazyExpiryBatchLimit, lazyExpiryActorType, nowUTC)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			s.invalidateCache(ctx, touchedEvents...)
+		}
+		return nil
+	}
+	count, err := s.orders.ExpireDueOrders(ctx, eventID, lazyExpiryBatchLimit, lazyExpiryActorType, nowUTC)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		if eventID != nil {
+			s.invalidateCache(ctx, *eventID)
+		} else {
+			s.invalidateCache(ctx)
+		}
+	}
+	return nil
+}
+
+func (s *EventService) invalidateCache(ctx context.Context, eventIDs ...uuid.UUID) {
+	if s.cache != nil {
+		s.cache.InvalidateEvents(ctx, eventIDs...)
+	}
 }
 
 func requireOrganizerActor(actor domain.Actor, msg string) error {

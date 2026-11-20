@@ -32,6 +32,8 @@ type RouterDeps struct {
 	Orders              *handler.OrderHandler
 	Webhooks            *handler.WebhookHandler
 	Demo                *handler.DemoHandler
+	RateLimiter         middleware.RateLimiter
+	RateLimitPolicy     middleware.RateLimitPolicy
 	AllowDemoHeaderAuth bool
 	CORSAllowedOrigins  []string
 }
@@ -48,6 +50,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.RequestID)
+	r.Use(middleware.WithClientIP)
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.Recoverer(logger))
 	r.Use(middleware.CORS(allowedOrigins))
@@ -72,6 +75,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 	api := humachi.New(r, cfg)
 	api.UseMiddleware(middleware.NewHumaAuthMiddleware(api, deps.Authenticator, logger, deps.AllowDemoHeaderAuth))
+	api.UseMiddleware(middleware.NewHumaRateLimitMiddleware(api, deps.RateLimiter, deps.RateLimitPolicy))
 
 	registerAuthRoutes(api, deps.Auth)
 	registerEventRoutes(api, deps.Events)

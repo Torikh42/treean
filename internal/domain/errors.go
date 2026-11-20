@@ -22,6 +22,7 @@ const (
 	ErrCodeUnauthorized          = "UNAUTHORIZED"
 	ErrCodeEmailAlreadyExists    = "EMAIL_ALREADY_EXISTS"
 	ErrCodeInvalidCredentials    = "INVALID_CREDENTIALS" //nolint:gosec // G101 false positive: public machine error code constant, not a secret.
+	ErrCodeRateLimited           = "RATE_LIMITED"
 	ErrCodeValidation            = "VALIDATION_ERROR"
 )
 
@@ -83,4 +84,9 @@ func NewPaymentAmountMismatchError(msg string) *DomainError {
 // NewUnauthorizedWebhookError creates an unauthorized error when webhook authentication fails.
 func NewUnauthorizedWebhookError(msg string) *DomainError {
 	return NewDomainError(http.StatusUnauthorized, ErrCodeUnauthorizedWebhook, msg)
+}
+
+// NewRateLimitedError creates a 429 error when a client exceeds a configured rate limit.
+func NewRateLimitedError(msg string) *DomainError {
+	return NewDomainError(http.StatusTooManyRequests, ErrCodeRateLimited, msg)
 }

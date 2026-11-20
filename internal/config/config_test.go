@@ -11,17 +11,27 @@ import (
 )
 
 const (
-	testEnvDatabaseURL         = "DATABASE_URL"
-	testEnvJWTSecret           = "JWT_SECRET"
-	testEnvWebhookSecret       = "WEBHOOK_SECRET"
-	testEnvPort                = "PORT"
-	testEnvAllowDemoHeaderAuth = "ALLOW_DEMO_HEADER_AUTH"
-	testEnvExpirySweepInterval = "EXPIRY_SWEEP_INTERVAL"
-	testEnvHTTPReadTimeout     = "HTTP_READ_TIMEOUT"
-	testEnvHTTPWriteTimeout    = "HTTP_WRITE_TIMEOUT"
-	testEnvDBMaxConns          = "DB_MAX_CONNS"
-	testEnvDBMinConns          = "DB_MIN_CONNS"
-	testEnvCORSAllowedOrigins  = "CORS_ALLOWED_ORIGINS"
+	testEnvDatabaseURL           = "DATABASE_URL"
+	testEnvJWTSecret             = "JWT_SECRET"
+	testEnvWebhookSecret         = "WEBHOOK_SECRET"
+	testEnvPort                  = "PORT"
+	testEnvAllowDemoHeaderAuth   = "ALLOW_DEMO_HEADER_AUTH"
+	testEnvExpirySweepInterval   = "EXPIRY_SWEEP_INTERVAL"
+	testEnvHTTPReadTimeout       = "HTTP_READ_TIMEOUT"
+	testEnvHTTPWriteTimeout      = "HTTP_WRITE_TIMEOUT"
+	testEnvDBMaxConns            = "DB_MAX_CONNS"
+	testEnvDBMinConns            = "DB_MIN_CONNS"
+	testEnvCORSAllowedOrigins    = "CORS_ALLOWED_ORIGINS"
+	testEnvRedisURL              = "REDIS_URL"
+	testEnvRedisTimeout          = "REDIS_TIMEOUT"
+	testEnvEventCacheTTL         = "EVENT_CACHE_TTL"
+	testEnvRateLimitEnabled      = "RATE_LIMIT_ENABLED"
+	testEnvRateLimitRegisterMax  = "RATE_LIMIT_REGISTER_MAX"
+	testEnvRateLimitLoginMax     = "RATE_LIMIT_LOGIN_MAX"
+	testEnvRateLimitLoginIPMax   = "RATE_LIMIT_LOGIN_IP_MAX"
+	testEnvRateLimitOrderUserMax = "RATE_LIMIT_ORDER_USER_MAX"
+	testEnvRateLimitOrderIPMax   = "RATE_LIMIT_ORDER_IP_MAX"
+	testEnvRateLimitDemoMax      = "RATE_LIMIT_DEMO_FLASH_SALE_MAX"
 
 	testDatabaseURL   = "postgres://u:p@localhost:5432/db?sslmode=disable"
 	testJWTSecret     = "jwt-secret"
@@ -46,6 +56,16 @@ func clearOptionalEnv(t *testing.T) {
 		testEnvDBMaxConns,
 		testEnvDBMinConns,
 		testEnvCORSAllowedOrigins,
+		testEnvRedisURL,
+		testEnvRedisTimeout,
+		testEnvEventCacheTTL,
+		testEnvRateLimitEnabled,
+		testEnvRateLimitRegisterMax,
+		testEnvRateLimitLoginMax,
+		testEnvRateLimitLoginIPMax,
+		testEnvRateLimitOrderUserMax,
+		testEnvRateLimitOrderIPMax,
+		testEnvRateLimitDemoMax,
 	} {
 		t.Setenv(key, "")
 	}
@@ -92,35 +112,32 @@ func TestLoad_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.DatabaseURL != testDatabaseURL {
-		t.Fatalf("DatabaseURL = %q, want %q", cfg.DatabaseURL, testDatabaseURL)
+	assertDefaultCoreConfig(t, cfg)
+	assertDefaultRedisAndRateLimit(t, cfg)
+}
+
+func assertDefaultCoreConfig(t *testing.T, cfg Config) {
+	t.Helper()
+	checks := []struct {
+		name string
+		got  any
+		want any
+	}{
+		{"DatabaseURL", cfg.DatabaseURL, testDatabaseURL},
+		{"JWTSecret", cfg.JWTSecret, testJWTSecret},
+		{"WebhookSecret", cfg.WebhookSecret, testWebhookSecret},
+		{"Port", cfg.Port, "8080"},
+		{"AllowDemoHeaderAuth", cfg.AllowDemoHeaderAuth, false},
+		{"ExpirySweepInterval", cfg.ExpirySweepInterval, 5 * time.Second},
+		{"HTTPReadTimeout", cfg.HTTPReadTimeout, 15 * time.Second},
+		{"HTTPWriteTimeout", cfg.HTTPWriteTimeout, 30 * time.Second},
+		{"DBMaxConns", cfg.DBMaxConns, int32(50)},
+		{"DBMinConns", cfg.DBMinConns, int32(5)},
 	}
-	if cfg.JWTSecret != testJWTSecret {
-		t.Fatalf("JWTSecret = %q, want %q", cfg.JWTSecret, testJWTSecret)
-	}
-	if cfg.WebhookSecret != testWebhookSecret {
-		t.Fatalf("WebhookSecret = %q, want %q", cfg.WebhookSecret, testWebhookSecret)
-	}
-	if cfg.Port != "8080" {
-		t.Fatalf("Port = %q, want 8080", cfg.Port)
-	}
-	if cfg.AllowDemoHeaderAuth {
-		t.Fatal("expected AllowDemoHeaderAuth to be false")
-	}
-	if cfg.ExpirySweepInterval != 5*time.Second {
-		t.Fatalf("ExpirySweepInterval = %v, want 5s", cfg.ExpirySweepInterval)
-	}
-	if cfg.HTTPReadTimeout != 15*time.Second {
-		t.Fatalf("HTTPReadTimeout = %v, want 15s", cfg.HTTPReadTimeout)
-	}
-	if cfg.HTTPWriteTimeout != 30*time.Second {
-		t.Fatalf("HTTPWriteTimeout = %v, want 30s", cfg.HTTPWriteTimeout)
-	}
-	if cfg.DBMaxConns != 50 {
-		t.Fatalf("DBMaxConns = %d, want 50", cfg.DBMaxConns)
-	}
-	if cfg.DBMinConns != 5 {
-		t.Fatalf("DBMinConns = %d, want 5", cfg.DBMinConns)
+	for _, tc := range checks {
+		if tc.got != tc.want {
+			t.Fatalf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
 	}
 	wantDefaultOrigins := []string{
 		"http://localhost:5173",
@@ -130,6 +147,31 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	if !slices.Equal(cfg.CORSAllowedOrigins, wantDefaultOrigins) {
 		t.Fatalf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, wantDefaultOrigins)
+	}
+}
+
+func assertDefaultRedisAndRateLimit(t *testing.T, cfg Config) {
+	t.Helper()
+	checks := []struct {
+		name string
+		got  any
+		want any
+	}{
+		{"RedisURL", cfg.RedisURL, ""},
+		{"RedisTimeout", cfg.RedisTimeout, 500 * time.Millisecond},
+		{"EventCacheTTL", cfg.EventCacheTTL, 3 * time.Second},
+		{"RateLimitEnabled", cfg.RateLimitEnabled, true},
+		{"RateLimitRegisterMax", cfg.RateLimitRegisterMax, 5},
+		{"RateLimitLoginMax", cfg.RateLimitLoginMax, 10},
+		{"RateLimitLoginIPMax", cfg.RateLimitLoginIPMax, 60},
+		{"RateLimitOrderUserMax", cfg.RateLimitOrderUserMax, 20},
+		{"RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 300},
+		{"RateLimitDemoFlashSaleMax", cfg.RateLimitDemoFlashSaleMax, 5},
+	}
+	for _, tc := range checks {
+		if tc.got != tc.want {
+			t.Fatalf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
 	}
 }
 
@@ -314,6 +356,7 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 		DatabaseURL:         "postgres://secret_user:super_secret_pass@db:5432/prod",
 		JWTSecret:           "super-secret-jwt-key",
 		WebhookSecret:       "super-secret-webhook-key",
+		RedisURL:            "redis://:super-secret-redis-pass@redis:6379/0",
 		AllowDemoHeaderAuth: true,
 		ExpirySweepInterval: 5 * time.Second,
 		HTTPReadTimeout:     15 * time.Second,
@@ -328,7 +371,7 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 	logger.Info("config loaded", slog.Any("config", cfg))
 
 	rawOut := buf.String()
-	for _, secret := range []string{cfg.DatabaseURL, cfg.JWTSecret, cfg.WebhookSecret} {
+	for _, secret := range []string{cfg.DatabaseURL, cfg.JWTSecret, cfg.WebhookSecret, cfg.RedisURL} {
 		if strings.Contains(rawOut, secret) {
 			t.Fatalf("log output leaked secret %q: %s", secret, rawOut)
 		}

@@ -10,30 +10,58 @@ import (
 	"time"
 )
 
-const redactedValue = "[REDACTED]"
+const (
+	redactedValue             = "[REDACTED]"
+	defaultRedisTimeout       = 500 * time.Millisecond
+	defaultEventCacheTTL      = 3 * time.Second
+	defaultRateLimitRegMax    = 5
+	defaultRateLimitLoginMax  = 10
+	defaultRateLimitLoginIP   = 60
+	defaultRateLimitOrderUser = 20
+	defaultRateLimitOrderIP   = 300
+	defaultRateLimitDemoMax   = 5
+)
 
 // Config holds validated runtime configuration for the API server and workers.
 type Config struct {
-	Port                string
-	DatabaseURL         string
-	JWTSecret           string
-	WebhookSecret       string
-	AllowDemoHeaderAuth bool
-	ExpirySweepInterval time.Duration
-	HTTPReadTimeout     time.Duration
-	HTTPWriteTimeout    time.Duration
-	DBMaxConns          int32
-	DBMinConns          int32
-	CORSAllowedOrigins  []string
+	Port                      string
+	DatabaseURL               string
+	JWTSecret                 string
+	WebhookSecret             string
+	RedisURL                  string
+	RedisTimeout              time.Duration
+	EventCacheTTL             time.Duration
+	RateLimitEnabled          bool
+	RateLimitRegisterMax      int
+	RateLimitLoginMax         int
+	RateLimitLoginIPMax       int
+	RateLimitOrderUserMax     int
+	RateLimitOrderIPMax       int
+	RateLimitDemoFlashSaleMax int
+	AllowDemoHeaderAuth       bool
+	ExpirySweepInterval       time.Duration
+	HTTPReadTimeout           time.Duration
+	HTTPWriteTimeout          time.Duration
+	DBMaxConns                int32
+	DBMinConns                int32
+	CORSAllowedOrigins        []string
 }
 
 // LogValue implements slog.LogValuer and redacts sensitive fields from logs.
 func (c Config) LogValue() slog.Value {
+	redisState := "disabled"
+	if c.RedisURL != "" {
+		redisState = redactedValue
+	}
 	return slog.GroupValue(
 		slog.String("port", c.Port),
 		slog.String("database_url", redactedValue),
 		slog.String("jwt_secret", redactedValue),
 		slog.String("webhook_secret", redactedValue),
+		slog.String("redis_url", redisState),
+		slog.Duration("redis_timeout", c.RedisTimeout),
+		slog.Duration("event_cache_ttl", c.EventCacheTTL),
+		slog.Bool("rate_limit_enabled", c.RateLimitEnabled),
 		slog.Bool("allow_demo_header_auth", c.AllowDemoHeaderAuth),
 		slog.Duration("expiry_sweep_interval", c.ExpirySweepInterval),
 		slog.Duration("http_read_timeout", c.HTTPReadTimeout),
@@ -101,7 +129,7 @@ func Load() (Config, error) {
 
 	corsAllowedOrigins := parseCSVList("CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins())
 
-	return Config{
+	cfg := Config{
 		Port:                port,
 		DatabaseURL:         dbURL,
 		JWTSecret:           jwtSecret,
@@ -113,7 +141,45 @@ func Load() (Config, error) {
 		DBMaxConns:          maxConns,
 		DBMinConns:          minConns,
 		CORSAllowedOrigins:  corsAllowedOrigins,
-	}, nil
+	}
+	if err := loadRedisAndRateLimitConfig(&cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func loadRedisAndRateLimitConfig(cfg *Config) error {
+	cfg.RedisURL = strings.TrimSpace(os.Getenv("REDIS_URL"))
+
+	var err error
+	if cfg.RedisTimeout, err = parseDuration("REDIS_TIMEOUT", defaultRedisTimeout); err != nil {
+		return err
+	}
+	if cfg.EventCacheTTL, err = parseDuration("EVENT_CACHE_TTL", defaultEventCacheTTL); err != nil {
+		return err
+	}
+	if cfg.RateLimitEnabled, err = parseBool("RATE_LIMIT_ENABLED", true); err != nil {
+		return err
+	}
+	if cfg.RateLimitRegisterMax, err = parsePositiveInt("RATE_LIMIT_REGISTER_MAX", defaultRateLimitRegMax); err != nil {
+		return err
+	}
+	if cfg.RateLimitLoginMax, err = parsePositiveInt("RATE_LIMIT_LOGIN_MAX", defaultRateLimitLoginMax); err != nil {
+		return err
+	}
+	if cfg.RateLimitLoginIPMax, err = parsePositiveInt("RATE_LIMIT_LOGIN_IP_MAX", defaultRateLimitLoginIP); err != nil {
+		return err
+	}
+	if cfg.RateLimitOrderUserMax, err = parsePositiveInt("RATE_LIMIT_ORDER_USER_MAX", defaultRateLimitOrderUser); err != nil {
+		return err
+	}
+	if cfg.RateLimitOrderIPMax, err = parsePositiveInt("RATE_LIMIT_ORDER_IP_MAX", defaultRateLimitOrderIP); err != nil {
+		return err
+	}
+	if cfg.RateLimitDemoFlashSaleMax, err = parsePositiveInt("RATE_LIMIT_DEMO_FLASH_SALE_MAX", defaultRateLimitDemoMax); err != nil {
+		return err
+	}
+	return nil
 }
 
 func requireNonBlankEnv(key string) (string, error) {
@@ -179,6 +245,21 @@ func parseInt32(key string, fallback int32) (int32, error) {
 		return 0, fmt.Errorf("invalid positive integer for %s: %d", key, n)
 	}
 	return int32(n), nil
+}
+
+func parsePositiveInt(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid integer for %s: %w", key, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("invalid positive integer for %s: %d", key, n)
+	}
+	return n, nil
 }
 
 func defaultCORSAllowedOrigins() []string {

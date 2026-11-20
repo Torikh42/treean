@@ -21,6 +21,18 @@ type CreateOrderBody struct {
 	Items   []OrderItemBody `json:"items" minItems:"1" maxItems:"4" doc:"1 to 4 total tickets across tiers"`
 }
 
+// CreateOrderInput captures checkout body plus optional Idempotency-Key header.
+type CreateOrderInput struct {
+	IdempotencyKey string `header:"Idempotency-Key" maxLength:"128" doc:"Optional unique key preventing duplicate order creation on retries"`
+	Body           CreateOrderBody
+}
+
+// CreateOrderOutput wraps the reserved order response with optional replay indicator header.
+type CreateOrderOutput struct {
+	IdempotentReplay string `header:"Idempotent-Replay" doc:"Set to true when returning a previously created order for a matching Idempotency-Key"`
+	Body             *domain.Order
+}
+
 // OrderHandler handles ticket reservation, cancellation, and order lookup endpoints.
 type OrderHandler struct {
 	svc    *service.OrderService
@@ -33,7 +45,7 @@ func NewOrderHandler(svc *service.OrderService, logger *slog.Logger) *OrderHandl
 }
 
 // Create reserves 1 to 4 tickets for 15 minutes in WAITING_PAYMENT status.
-func (h *OrderHandler) Create(ctx context.Context, in *struct{ Body CreateOrderBody }) (*struct{ Body *domain.Order }, error) {
+func (h *OrderHandler) Create(ctx context.Context, in *CreateOrderInput) (*CreateOrderOutput, error) {
 	actor, err := RequireActor(ctx)
 	if err != nil {
 		return nil, MapServiceError(ctx, h.logger, err)
@@ -52,11 +64,19 @@ func (h *OrderHandler) Create(ctx context.Context, in *struct{ Body CreateOrderB
 		items[i] = repository.CheckoutItemInput{TicketTypeID: tid, Quantity: it.Quantity}
 	}
 
-	order, err := h.svc.CreateOrder(ctx, actor, service.CreateOrderInput{EventID: eventID, Items: items})
+	res, err := h.svc.CreateOrderWithResult(ctx, actor, service.CreateOrderInput{
+		EventID:        eventID,
+		Items:          items,
+		IdempotencyKey: in.IdempotencyKey,
+	})
 	if err != nil {
 		return nil, MapServiceError(ctx, h.logger, err)
 	}
-	return &struct{ Body *domain.Order }{Body: order}, nil
+	out := &CreateOrderOutput{Body: res.Order}
+	if res.IdempotentReplay {
+		out.IdempotentReplay = "true"
+	}
+	return out, nil
 }
 
 // Cancel cancels an unpaid order and immediately restores reserved ticket quota.

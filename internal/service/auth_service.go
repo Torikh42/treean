@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/torikh42/treean/internal/domain"
+	"github.com/torikh42/treean/internal/middleware"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -31,8 +34,10 @@ const (
 
 // AuthService manages registration, login, and JWT issuance/verification.
 type AuthService struct {
-	users     UserRepository
-	jwtSecret []byte
+	users        UserRepository
+	jwtSecret    []byte
+	limiter      RateLimiter
+	loginAcctMax int
 }
 
 // NewAuthService constructs an AuthService.
@@ -41,6 +46,15 @@ func NewAuthService(users UserRepository, jwtSecret string) *AuthService {
 		users:     users,
 		jwtSecret: []byte(jwtSecret),
 	}
+}
+
+// WithLoginRateLimiter enables fail-open per-(IP+email) throttling before bcrypt runs.
+func (s *AuthService) WithLoginRateLimiter(limiter RateLimiter, maxPerMinute int) *AuthService {
+	if s != nil {
+		s.limiter = limiter
+		s.loginAcctMax = maxPerMinute
+	}
+	return s
 }
 
 // RegisterInput carries registration fields.
@@ -106,6 +120,9 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthR
 	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
 	if normalizedEmail == "" || strings.TrimSpace(password) == "" {
 		return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeInvalidCredentials, errMsgInvalidCreds)
+	}
+	if err := s.enforceLoginRateLimit(ctx, normalizedEmail); err != nil {
+		return nil, err
 	}
 
 	u, err := s.users.FindByEmail(ctx, normalizedEmail)
@@ -177,6 +194,27 @@ func (s *AuthService) EnsureDemoUser(ctx context.Context, id uuid.UUID, role dom
 
 func (s *AuthService) hasJWTSecret() bool {
 	return s != nil && len(bytes.TrimSpace(s.jwtSecret)) > 0
+}
+
+func (s *AuthService) enforceLoginRateLimit(ctx context.Context, normalizedEmail string) error {
+	if s.limiter == nil || s.loginAcctMax <= 0 {
+		return nil
+	}
+	ip := middleware.ClientIPFromContext(ctx)
+	if ip == "" {
+		ip = "unknown"
+	}
+	sum := sha256.Sum256([]byte(normalizedEmail))
+	key := "rl:login:acct:" + ip + ":" + hex.EncodeToString(sum[:8])
+	allowed, _, err := s.limiter.Allow(ctx, key, s.loginAcctMax, time.Minute)
+	if err != nil {
+		// Fail open when limiter store errors so login continues uninterrupted.
+		allowed = true
+	}
+	if allowed {
+		return nil
+	}
+	return domain.NewRateLimitedError("too many login attempts; please wait and try again")
 }
 
 func (s *AuthService) signJWT(u *domain.User) (string, error) {

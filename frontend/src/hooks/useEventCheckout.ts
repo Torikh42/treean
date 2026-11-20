@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -16,6 +16,13 @@ import { getActiveRole, isAuthenticated, useAuthStore } from "@/store/auth-store
 
 export const MAX_TICKETS_PER_ORDER = 4;
 
+function generateIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `ord-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function useEventCheckout(eventId: string) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -26,6 +33,7 @@ export function useEventCheckout(eventId: string) {
 
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [submitError, setSubmitError] = useState<ParsedApiError | null>(null);
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   const eventQuery = useQuery(getEventOptions({ path: { id: eventId } }));
   const myOrdersQuery = useQuery({
@@ -43,6 +51,7 @@ export function useEventCheckout(eventId: string) {
   const createMut = useMutation({
     ...createOrderMutation(),
     onSuccess: (order) => {
+      idempotencyKeyRef.current = null;
       setSubmitError(null);
       setQuantities({});
       void queryClient.invalidateQueries({ queryKey: listEventsQueryKey() });
@@ -67,6 +76,7 @@ export function useEventCheckout(eventId: string) {
   );
 
   function updateQuantity(tierId: string, delta: number, maxQuota: number) {
+    idempotencyKeyRef.current = null;
     setSubmitError(null);
     setQuantities((prev) => {
       const current = prev[tierId] ?? 0;
@@ -133,7 +143,11 @@ export function useEventCheckout(eventId: string) {
       return;
     }
 
+    idempotencyKeyRef.current ??= generateIdempotencyKey();
     createMut.mutate({
+      headers: {
+        "Idempotency-Key": idempotencyKeyRef.current,
+      },
       body: {
         event_id: eventId,
         items,

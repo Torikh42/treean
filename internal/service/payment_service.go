@@ -43,6 +43,7 @@ type PaymentService struct {
 	webhooks      WebhookRepository
 	events        EventRepository
 	webhookSecret string
+	cache         EventCatalogCache
 }
 
 // NewPaymentService constructs a PaymentService.
@@ -53,6 +54,14 @@ func NewPaymentService(orders OrderRepository, webhooks WebhookRepository, event
 		events:        events,
 		webhookSecret: webhookSecret,
 	}
+}
+
+// WithCache attaches an optional EventCatalogCache for invalidating event views on quota transitions.
+func (s *PaymentService) WithCache(cache EventCatalogCache) *PaymentService {
+	if s != nil {
+		s.cache = cache
+	}
+	return s
 }
 
 // ProcessWebhook verifies signatures fail-closed, preserves audit logs outside rollbacks, and updates order state idempotently.
@@ -171,6 +180,7 @@ func (s *PaymentService) handleSettlement(
 	res, err := s.orders.ConfirmPayment(ctx, parsedOrderID, grossAmount, time.Now().UTC())
 	if err != nil {
 		s.classifyAndLogFailure(ctx, audit, err, true)
+		s.invalidateOnLazyExpiry(ctx, parsedOrderID, err)
 		return nil, err
 	}
 	if res == nil {
@@ -183,6 +193,9 @@ func (s *PaymentService) handleSettlement(
 		audit.Outcome = domain.OutcomeIgnoredDuplicate
 	} else {
 		audit.Outcome = domain.OutcomeProcessedPaid
+		if s.cache != nil && res.Order != nil {
+			s.cache.InvalidateEvents(ctx, res.Order.EventID)
+		}
 	}
 	if err := s.webhooks.LogDelivery(ctx, audit); err != nil {
 		return nil, err
@@ -200,16 +213,44 @@ func (s *PaymentService) handleFailureStatus(
 	parsedOrderID uuid.UUID,
 	status string,
 ) (*WebhookResult, error) {
-	outcome, err := s.orders.FailPayment(ctx, parsedOrderID, "gateway status: "+status, time.Now().UTC())
+	nowUTC := time.Now().UTC()
+	var outcome domain.WebhookOutcome
+	var affectedEventID uuid.UUID
+	var err error
+	if aware, ok := s.orders.(EventAwareFailureRepository); ok {
+		outcome, affectedEventID, err = aware.FailPaymentWithEvent(ctx, parsedOrderID, "gateway status: "+status, nowUTC)
+	} else {
+		outcome, err = s.orders.FailPayment(ctx, parsedOrderID, "gateway status: "+status, nowUTC)
+	}
 	if err != nil {
 		s.classifyAndLogFailure(ctx, audit, err, false)
 		return nil, err
+	}
+	if s.cache != nil && outcome == domain.OutcomeProcessedFailed {
+		if affectedEventID != uuid.Nil {
+			s.cache.InvalidateEvents(ctx, affectedEventID)
+		} else {
+			s.cache.InvalidateEvents(ctx)
+		}
 	}
 	audit.Outcome = outcome
 	if err := s.webhooks.LogDelivery(ctx, audit); err != nil {
 		return nil, err
 	}
 	return &WebhookResult{Outcome: outcome}, nil
+}
+
+func (s *PaymentService) invalidateOnLazyExpiry(ctx context.Context, orderID uuid.UUID, err error) {
+	if s.cache == nil {
+		return
+	}
+	if de, ok := errors.AsType[*domain.DomainError](err); ok && de.Code == domain.ErrCodeOrderExpired {
+		if existing, findErr := s.orders.FindByID(ctx, orderID); findErr == nil && existing != nil {
+			s.cache.InvalidateEvents(ctx, existing.EventID)
+			return
+		}
+		s.cache.InvalidateEvents(ctx)
+	}
 }
 
 func (s *PaymentService) classifyAndLogFailure(

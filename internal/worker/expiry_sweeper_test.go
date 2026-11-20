@@ -360,3 +360,55 @@ func TestExpirySweeper_DefensiveGuardsAndDefaults(t *testing.T) {
 		}
 	})
 }
+
+type eventAwareExpiryMock struct {
+	*mockExpiryStore
+	touchedEvents []uuid.UUID
+}
+
+func (m *eventAwareExpiryMock) ExpireDueOrdersWithEvents(
+	ctx context.Context,
+	eventID *uuid.UUID,
+	limit int,
+	actorType string,
+	now time.Time,
+) (int, []uuid.UUID, error) {
+	count, err := m.ExpireDueOrders(ctx, eventID, limit, actorType, now)
+	return count, m.touchedEvents, err
+}
+
+type spyEventCacheInvalidator struct {
+	mu    sync.Mutex
+	calls [][]uuid.UUID
+}
+
+func (s *spyEventCacheInvalidator) InvalidateEvents(_ context.Context, eventIDs ...uuid.UUID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]uuid.UUID, len(eventIDs))
+	copy(cp, eventIDs)
+	s.calls = append(s.calls, cp)
+}
+
+func TestExpirySweeper_InvalidatesEventCacheOnExpiredOrders(t *testing.T) {
+	t.Parallel()
+
+	evA := uuid.New()
+	evB := uuid.New()
+	cache := &spyEventCacheInvalidator{}
+
+	storeZero := &eventAwareExpiryMock{mockExpiryStore: &mockExpiryStore{result: 0}}
+	worker.NewExpirySweeper(storeZero, nil, time.Second, 10).WithCache(cache).RunOnce(t.Context())
+	if len(cache.calls) != 0 {
+		t.Fatalf("expected 0 invalidations when expired=0, got %v", cache.calls)
+	}
+
+	storeHit := &eventAwareExpiryMock{
+		mockExpiryStore: &mockExpiryStore{result: 2},
+		touchedEvents:   []uuid.UUID{evA, evB},
+	}
+	worker.NewExpirySweeper(storeHit, nil, time.Second, 10).WithCache(cache).RunOnce(t.Context())
+	if len(cache.calls) != 1 || len(cache.calls[0]) != 2 || cache.calls[0][0] != evA || cache.calls[0][1] != evB {
+		t.Fatalf("unexpected invalidated event IDs: %+v", cache.calls)
+	}
+}

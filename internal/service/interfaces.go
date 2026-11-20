@@ -51,6 +51,35 @@ type WebhookRepository interface {
 	LogDelivery(ctx context.Context, w *domain.PaymentWebhook) error
 }
 
+// IdempotentOrderCreator extends OrderRepository with explicit Idempotency-Key deduplication.
+type IdempotentOrderCreator interface {
+	CreateOrderIdempotent(ctx context.Context, eventID, buyerID uuid.UUID, items []repository.CheckoutItemInput, idempotencyKey string, now time.Time) (*repository.CreateOrderResult, error)
+}
+
+// EventAwareExpiryStore extends OrderRepository by returning touched event IDs when sweeping expired orders.
+type EventAwareExpiryStore interface {
+	ExpireDueOrdersWithEvents(ctx context.Context, eventID *uuid.UUID, limit int, actorType string, now time.Time) (int, []uuid.UUID, error)
+}
+
+// EventAwareFailureRepository extends OrderRepository by returning the affected event ID when failing payment.
+type EventAwareFailureRepository interface {
+	FailPaymentWithEvent(ctx context.Context, orderID uuid.UUID, reason string, now time.Time) (domain.WebhookOutcome, uuid.UUID, error)
+}
+
+// EventCatalogCache provides optional fail-open short-TTL caching for public event views.
+type EventCatalogCache interface {
+	GetEventsCatalog(ctx context.Context) ([]domain.Event, bool)
+	SetEventsCatalog(ctx context.Context, events []domain.Event, ttl time.Duration)
+	GetEventDetail(ctx context.Context, eventID uuid.UUID) (*domain.Event, bool)
+	SetEventDetail(ctx context.Context, ev *domain.Event, ttl time.Duration)
+	InvalidateEvents(ctx context.Context, eventIDs ...uuid.UUID)
+}
+
+// RateLimiter checks per-key fixed-window rate limits in a fail-open store.
+type RateLimiter interface {
+	Allow(ctx context.Context, key string, limit int, window time.Duration) (allowed bool, retryAfter time.Duration, err error)
+}
+
 func validateServiceCall(ctx context.Context, op string, ready bool) error {
 	if !ready {
 		return errors.New(op + ": service or repository is nil")

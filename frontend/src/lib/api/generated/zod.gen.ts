@@ -129,6 +129,7 @@ export const zOrder = z.object({
     expired_at: z.iso.datetime().optional(),
     expires_at: z.iso.datetime(),
     id: z.string(),
+    idempotency_key: z.string().optional(),
     invoice_number: z.string(),
     items: z.array(zOrderItem).nullish(),
     logs: z.array(zOrderLog).nullish(),
@@ -262,6 +263,7 @@ export const zOrderWritable = z.object({
     expired_at: z.iso.datetime().optional(),
     expires_at: z.iso.datetime(),
     id: z.string(),
+    idempotency_key: z.string().optional(),
     invoice_number: z.string(),
     items: z.array(zOrderItem).nullish(),
     logs: z.array(zOrderLog).nullish(),
@@ -388,6 +390,10 @@ export const zUpdateEventResponse = zEvent;
 export const zListMyOrdersResponse = z.array(zOrder).nullable();
 
 export const zCreateOrderBody2 = zCreateOrderBodyWritable;
+
+export const zCreateOrderHeaders = z.object({
+    'Idempotency-Key': z.string().max(128).optional()
+});
 
 /**
  * Created

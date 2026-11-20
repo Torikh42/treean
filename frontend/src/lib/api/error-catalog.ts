@@ -95,6 +95,11 @@ export const ERROR_COPY_MAP: Readonly<Record<string, ErrorCopy>> = {
     userMessage: "The submitted gross amount does not match the order total.",
     actionHint: "Match gross_amount exactly with the order total in IDR.",
   },
+  RATE_LIMITED: {
+    userTitle: "Too many requests",
+    userMessage: "You are sending requests too quickly right now.",
+    actionHint: "Please wait a few seconds before trying again.",
+  },
   VALIDATION_ERROR: {
     userTitle: "Please check your inputs",
     userMessage: "Some entered values are missing or outside the allowed format.",
