@@ -23,6 +23,7 @@ import (
 	"github.com/torikh42/treean/internal/domain"
 	"github.com/torikh42/treean/internal/handler"
 	"github.com/torikh42/treean/internal/repository"
+	"github.com/torikh42/treean/internal/routes"
 	"github.com/torikh42/treean/internal/service"
 	"github.com/torikh42/treean/internal/worker"
 )
@@ -105,14 +106,15 @@ func setupTestEnv(t *testing.T) *testEnv {
 	paymentSvc := service.NewPaymentService(orderRepo, webhookRepo, eventRepo, cfg.WebhookSecret)
 	demoSvc := service.NewDemoService(userRepo, eventRepo, orderSvc)
 
-	r := handler.NewRouter(handler.RouterDeps{
+	r := routes.NewRouter(routes.RouterDeps{
 		Logger:              logger,
-		DB:                  pool,
-		AuthService:         authSvc,
-		EventService:        eventSvc,
-		OrderService:        orderSvc,
-		PaymentService:      paymentSvc,
-		DemoService:         demoSvc,
+		Authenticator:       authSvc,
+		System:              handler.NewSystemHandler(pool, logger),
+		Auth:                handler.NewAuthHandler(authSvc, logger),
+		Events:              handler.NewEventHandler(eventSvc, logger),
+		Orders:              handler.NewOrderHandler(orderSvc, logger),
+		Webhooks:            handler.NewWebhookHandler(paymentSvc, logger),
+		Demo:                handler.NewDemoHandler(demoSvc, logger),
 		AllowDemoHeaderAuth: true,
 	})
 	srv := httptest.NewServer(r)

@@ -3,19 +3,14 @@ package handler
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 	"github.com/torikh42/treean/internal/domain"
 	"github.com/torikh42/treean/internal/service"
 )
 
-const (
-	eventsTag  = "Events"
-	fieldEvent = "event"
-)
+const fieldEvent = "event"
 
 // CreateTierBody defines one ticket tier inside an event creation request.
 type CreateTierBody struct {
@@ -50,174 +45,125 @@ type UpdateEventBody struct {
 	TicketTypes []UpdateTierBody `json:"ticket_types" minItems:"2" maxItems:"10" doc:"Between 2 and 10 ticket types"`
 }
 
-func registerEventRoutes(api huma.API, logger *slog.Logger, eventSvc *service.EventService) {
-	registerCreateEventRoute(api, logger, eventSvc)
-	registerListEventsRoute(api, logger, eventSvc)
-	registerListOrganizerEventsRoute(api, logger, eventSvc)
-	registerGetEventRoute(api, logger, eventSvc)
-	registerUpdateEventRoute(api, logger, eventSvc)
-	registerDeleteEventRoute(api, logger, eventSvc)
+// EventHandler handles public event catalog queries and organizer event CRUD.
+type EventHandler struct {
+	svc    *service.EventService
+	logger *slog.Logger
 }
 
-func registerCreateEventRoute(api huma.API, logger *slog.Logger, eventSvc *service.EventService) {
-	huma.Register(api, huma.Operation{
-		OperationID:   "create-event",
-		Method:        http.MethodPost,
-		Path:          "/api/v1/events",
-		Summary:       "Create a new event with 2+ ticket tiers (Organizer only)",
-		Tags:          []string{eventsTag},
-		DefaultStatus: http.StatusCreated,
-		Security:      bearerSecurity,
-	}, func(ctx context.Context, in *struct{ Body CreateEventBody }) (*struct{ Body *domain.Event }, error) {
-		actor, err := requireActor(ctx)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		tiers := make([]service.CreateTierInput, len(in.Body.TicketTypes))
-		for i, tt := range in.Body.TicketTypes {
-			tiers[i] = service.CreateTierInput{Name: tt.Name, PriceIDR: tt.PriceIDR, TotalQuota: tt.TotalQuota}
-		}
-		ev, err := eventSvc.CreateEvent(ctx, actor, service.CreateEventInput{
-			Title:       in.Body.Title,
-			Description: in.Body.Description,
-			Venue:       in.Body.Venue,
-			EventDate:   in.Body.EventDate,
-			TicketTypes: tiers,
-		})
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return &struct{ Body *domain.Event }{Body: ev}, nil
-	})
+// NewEventHandler constructs an EventHandler.
+func NewEventHandler(svc *service.EventService, logger *slog.Logger) *EventHandler {
+	return &EventHandler{svc: svc, logger: SafeLogger(logger)}
 }
 
-func registerListEventsRoute(api huma.API, logger *slog.Logger, eventSvc *service.EventService) {
-	huma.Register(api, huma.Operation{
-		OperationID: "list-events",
-		Method:      http.MethodGet,
-		Path:        "/api/v1/events",
-		Summary:     "List all events with live remaining ticket quotas",
-		Tags:        []string{eventsTag},
-	}, func(ctx context.Context, _ *struct{}) (*struct{ Body []domain.Event }, error) {
-		evs, err := eventSvc.ListEvents(ctx)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return &struct{ Body []domain.Event }{Body: evs}, nil
+// Create creates a new event with 2+ ticket tiers for the authenticated organizer.
+func (h *EventHandler) Create(ctx context.Context, in *struct{ Body CreateEventBody }) (*struct{ Body *domain.Event }, error) {
+	actor, err := RequireActor(ctx)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	tiers := make([]service.CreateTierInput, len(in.Body.TicketTypes))
+	for i, tt := range in.Body.TicketTypes {
+		tiers[i] = service.CreateTierInput{Name: tt.Name, PriceIDR: tt.PriceIDR, TotalQuota: tt.TotalQuota}
+	}
+	ev, err := h.svc.CreateEvent(ctx, actor, service.CreateEventInput{
+		Title:       in.Body.Title,
+		Description: in.Body.Description,
+		Venue:       in.Body.Venue,
+		EventDate:   in.Body.EventDate,
+		TicketTypes: tiers,
 	})
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return &struct{ Body *domain.Event }{Body: ev}, nil
 }
 
-func registerGetEventRoute(api huma.API, logger *slog.Logger, eventSvc *service.EventService) {
-	huma.Register(api, huma.Operation{
-		OperationID:        "get-event",
-		Method:             http.MethodGet,
-		Path:               "/api/v1/events/{id}",
-		Summary:            "Get event details and live remaining quota per ticket tier",
-		Tags:               []string{eventsTag},
-		SkipValidateParams: true,
-	}, func(ctx context.Context, in *struct {
-		ID string `path:"id" format:"uuid"`
-	}) (*struct{ Body *domain.Event }, error) {
-		uid, err := parseNonNilUUID(in.ID, fieldEvent)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		ev, err := eventSvc.GetEvent(ctx, uid)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return &struct{ Body *domain.Event }{Body: ev}, nil
-	})
+// List returns all events with live remaining ticket quotas.
+func (h *EventHandler) List(ctx context.Context, _ *struct{}) (*struct{ Body []domain.Event }, error) {
+	evs, err := h.svc.ListEvents(ctx)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return &struct{ Body []domain.Event }{Body: evs}, nil
 }
 
-func registerListOrganizerEventsRoute(api huma.API, logger *slog.Logger, eventSvc *service.EventService) {
-	huma.Register(api, huma.Operation{
-		OperationID: "list-organizer-events",
-		Method:      http.MethodGet,
-		Path:        "/api/v1/organizer/events",
-		Summary:     "List events owned by the authenticated organizer",
-		Tags:        []string{eventsTag},
-		Security:    bearerSecurity,
-	}, func(ctx context.Context, _ *struct{}) (*struct{ Body []domain.Event }, error) {
-		actor, err := requireActor(ctx)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		evs, err := eventSvc.ListOrganizerEvents(ctx, actor)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return &struct{ Body []domain.Event }{Body: evs}, nil
-	})
+// Get returns a single event with live remaining quota per ticket tier.
+func (h *EventHandler) Get(ctx context.Context, in *struct {
+	ID string `path:"id" format:"uuid"`
+}) (*struct{ Body *domain.Event }, error) {
+	uid, err := ParseNonNilUUID(in.ID, fieldEvent)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	ev, err := h.svc.GetEvent(ctx, uid)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return &struct{ Body *domain.Event }{Body: ev}, nil
 }
 
-func registerUpdateEventRoute(api huma.API, logger *slog.Logger, eventSvc *service.EventService) {
-	huma.Register(api, huma.Operation{
-		OperationID:        "update-event",
-		Method:             http.MethodPut,
-		Path:               "/api/v1/events/{id}",
-		Summary:            "Update an event and its ticket tiers (Owner organizer only)",
-		Tags:               []string{eventsTag},
-		Security:           bearerSecurity,
-		SkipValidateParams: true,
-	}, func(ctx context.Context, in *struct {
-		ID   string `path:"id" format:"uuid"`
-		Body UpdateEventBody
-	}) (*struct{ Body *domain.Event }, error) {
-		actor, err := requireActor(ctx)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		uid, err := parseNonNilUUID(in.ID, fieldEvent)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-
-		tiers, err := parseUpdateTierInputs(in.Body.TicketTypes)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-
-		ev, err := eventSvc.UpdateEvent(ctx, actor, uid, service.UpdateEventInput{
-			Title:       in.Body.Title,
-			Description: in.Body.Description,
-			Venue:       in.Body.Venue,
-			EventDate:   in.Body.EventDate,
-			TicketTypes: tiers,
-		})
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return &struct{ Body *domain.Event }{Body: ev}, nil
-	})
+// ListOrganizer returns events owned by the authenticated organizer.
+func (h *EventHandler) ListOrganizer(ctx context.Context, _ *struct{}) (*struct{ Body []domain.Event }, error) {
+	actor, err := RequireActor(ctx)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	evs, err := h.svc.ListOrganizerEvents(ctx, actor)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return &struct{ Body []domain.Event }{Body: evs}, nil
 }
 
-func registerDeleteEventRoute(api huma.API, logger *slog.Logger, eventSvc *service.EventService) {
-	huma.Register(api, huma.Operation{
-		OperationID:        "delete-event",
-		Method:             http.MethodDelete,
-		Path:               "/api/v1/events/{id}",
-		Summary:            "Delete an unused event with no orders (Owner organizer only)",
-		Tags:               []string{eventsTag},
-		DefaultStatus:      http.StatusNoContent,
-		Security:           bearerSecurity,
-		SkipValidateParams: true,
-	}, func(ctx context.Context, in *struct {
-		ID string `path:"id" format:"uuid"`
-	}) (*struct{}, error) {
-		actor, err := requireActor(ctx)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		uid, err := parseNonNilUUID(in.ID, fieldEvent)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		if err := eventSvc.DeleteEvent(ctx, actor, uid); err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return nil, nil
+// Update modifies an existing event and its ticket tiers owned by the authenticated organizer.
+func (h *EventHandler) Update(ctx context.Context, in *struct {
+	ID   string `path:"id" format:"uuid"`
+	Body UpdateEventBody
+}) (*struct{ Body *domain.Event }, error) {
+	actor, err := RequireActor(ctx)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	uid, err := ParseNonNilUUID(in.ID, fieldEvent)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+
+	tiers, err := parseUpdateTierInputs(in.Body.TicketTypes)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+
+	ev, err := h.svc.UpdateEvent(ctx, actor, uid, service.UpdateEventInput{
+		Title:       in.Body.Title,
+		Description: in.Body.Description,
+		Venue:       in.Body.Venue,
+		EventDate:   in.Body.EventDate,
+		TicketTypes: tiers,
 	})
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return &struct{ Body *domain.Event }{Body: ev}, nil
+}
+
+// Delete removes an unused event with zero buyer orders owned by the authenticated organizer.
+func (h *EventHandler) Delete(ctx context.Context, in *struct {
+	ID string `path:"id" format:"uuid"`
+}) (*struct{}, error) {
+	actor, err := RequireActor(ctx)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	uid, err := ParseNonNilUUID(in.ID, fieldEvent)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	if err := h.svc.DeleteEvent(ctx, actor, uid); err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return nil, nil
 }
 
 func parseUpdateTierInputs(raw []UpdateTierBody) ([]service.UpdateTierInput, error) {
@@ -225,7 +171,7 @@ func parseUpdateTierInputs(raw []UpdateTierBody) ([]service.UpdateTierInput, err
 	for i, tt := range raw {
 		var tierID *uuid.UUID
 		if tt.ID != nil {
-			parsed, err := parseNonNilUUID(*tt.ID, "ticket_type_id")
+			parsed, err := ParseNonNilUUID(*tt.ID, "ticket_type_id")
 			if err != nil {
 				return nil, err
 			}

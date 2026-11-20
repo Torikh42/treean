@@ -3,14 +3,10 @@ package handler
 import (
 	"context"
 	"log/slog"
-	"net/http"
 
-	"github.com/danielgtaylor/huma/v2"
 	"github.com/torikh42/treean/internal/domain"
 	"github.com/torikh42/treean/internal/service"
 )
-
-const authTag = "Auth"
 
 // RegisterBody defines the JSON request body for user account registration.
 type RegisterBody struct {
@@ -41,57 +37,49 @@ type MeOutput struct {
 	Body *domain.User
 }
 
-func registerAuthRoutes(api huma.API, logger *slog.Logger, authSvc *service.AuthService) {
-	huma.Register(api, huma.Operation{
-		OperationID:   "register-user",
-		Method:        http.MethodPost,
-		Path:          "/api/v1/auth/register",
-		Summary:       "Register an organizer or buyer account",
-		Tags:          []string{authTag},
-		DefaultStatus: http.StatusCreated,
-	}, func(ctx context.Context, in *struct{ Body RegisterBody }) (*RegisterOutput, error) {
-		res, err := authSvc.Register(ctx, service.RegisterInput{
-			Email:    in.Body.Email,
-			Name:     in.Body.Name,
-			Password: in.Body.Password,
-			Role:     domain.Role(in.Body.Role),
-		})
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return &RegisterOutput{Body: res}, nil
-	})
+// AuthHandler handles registration, credential login, and profile endpoints.
+type AuthHandler struct {
+	svc    *service.AuthService
+	logger *slog.Logger
+}
 
-	huma.Register(api, huma.Operation{
-		OperationID: "login-user",
-		Method:      http.MethodPost,
-		Path:        "/api/v1/auth/login",
-		Summary:     "Login with email and password to receive a Bearer JWT",
-		Tags:        []string{authTag},
-	}, func(ctx context.Context, in *struct{ Body LoginBody }) (*LoginOutput, error) {
-		res, err := authSvc.Login(ctx, in.Body.Email, in.Body.Password)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return &LoginOutput{Body: res}, nil
-	})
+// NewAuthHandler constructs an AuthHandler.
+func NewAuthHandler(svc *service.AuthService, logger *slog.Logger) *AuthHandler {
+	return &AuthHandler{svc: svc, logger: SafeLogger(logger)}
+}
 
-	huma.Register(api, huma.Operation{
-		OperationID: "get-me",
-		Method:      http.MethodGet,
-		Path:        "/api/v1/auth/me",
-		Summary:     "Get authenticated user profile",
-		Tags:        []string{authTag},
-		Security:    bearerSecurity,
-	}, func(ctx context.Context, _ *struct{}) (*MeOutput, error) {
-		actor, err := requireActor(ctx)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		user, err := authSvc.GetProfile(ctx, actor.ID)
-		if err != nil {
-			return nil, mapServiceError(ctx, logger, err)
-		}
-		return &MeOutput{Body: user}, nil
+// Register creates an organizer or buyer user and issues a signed Bearer JWT.
+func (h *AuthHandler) Register(ctx context.Context, in *struct{ Body RegisterBody }) (*RegisterOutput, error) {
+	res, err := h.svc.Register(ctx, service.RegisterInput{
+		Email:    in.Body.Email,
+		Name:     in.Body.Name,
+		Password: in.Body.Password,
+		Role:     domain.Role(in.Body.Role),
 	})
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return &RegisterOutput{Body: res}, nil
+}
+
+// Login verifies user credentials and issues a signed Bearer JWT.
+func (h *AuthHandler) Login(ctx context.Context, in *struct{ Body LoginBody }) (*LoginOutput, error) {
+	res, err := h.svc.Login(ctx, in.Body.Email, in.Body.Password)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return &LoginOutput{Body: res}, nil
+}
+
+// Me returns the profile of the authenticated caller.
+func (h *AuthHandler) Me(ctx context.Context, _ *struct{}) (*MeOutput, error) {
+	actor, err := RequireActor(ctx)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	user, err := h.svc.GetProfile(ctx, actor.ID)
+	if err != nil {
+		return nil, MapServiceError(ctx, h.logger, err)
+	}
+	return &MeOutput{Body: user}, nil
 }

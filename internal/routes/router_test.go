@@ -1,4 +1,4 @@
-package handler_test
+package routes_test
 
 import (
 	"bytes"
@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 	"github.com/torikh42/treean/internal/domain"
 	"github.com/torikh42/treean/internal/handler"
 	"github.com/torikh42/treean/internal/repository"
+	"github.com/torikh42/treean/internal/routes"
 	"github.com/torikh42/treean/internal/service"
 )
 
@@ -588,14 +588,16 @@ func newTestHarness(allowDemo bool) *testHarness {
 	paymentSvc := service.NewPaymentService(orders, webhooks, events, testWebhookSecret)
 	demoSvc := service.NewDemoService(users, events, orderSvc)
 
-	r := handler.NewRouter(handler.RouterDeps{
-		Logger:              slog.New(slog.DiscardHandler),
-		DB:                  pinger,
-		AuthService:         authSvc,
-		EventService:        eventSvc,
-		OrderService:        orderSvc,
-		PaymentService:      paymentSvc,
-		DemoService:         demoSvc,
+	logger := slog.New(slog.DiscardHandler)
+	r := routes.NewRouter(routes.RouterDeps{
+		Logger:              logger,
+		Authenticator:       authSvc,
+		System:              handler.NewSystemHandler(pinger, logger),
+		Auth:                handler.NewAuthHandler(authSvc, logger),
+		Events:              handler.NewEventHandler(eventSvc, logger),
+		Orders:              handler.NewOrderHandler(orderSvc, logger),
+		Webhooks:            handler.NewWebhookHandler(paymentSvc, logger),
+		Demo:                handler.NewDemoHandler(demoSvc, logger),
 		AllowDemoHeaderAuth: allowDemo,
 	})
 	return &testHarness{
@@ -709,32 +711,6 @@ func createTestOrder(t *testing.T, r http.Handler, token string, eventID, tierID
 	return ord
 }
 
-func TestAPIError_NilAndStatusBehavior(t *testing.T) {
-	t.Parallel()
-
-	var nilErr *handler.APIError
-	if nilErr.Error() != "" {
-		t.Fatalf("nil APIError.Error() = %q, want empty", nilErr.Error())
-	}
-	if nilErr.GetStatus() != http.StatusInternalServerError {
-		t.Fatalf("nil APIError.GetStatus() = %d, want 500", nilErr.GetStatus())
-	}
-	exportedOnly := &handler.APIError{Status: http.StatusBadRequest, Detail: "bad"}
-	if exportedOnly.Error() != "bad" || exportedOnly.GetStatus() != http.StatusBadRequest {
-		t.Fatalf("unexpected Error/GetStatus on exportedOnly: %q / %d", exportedOnly.Error(), exportedOnly.GetStatus())
-	}
-
-	_ = handler.NewRouter(handler.RouterDeps{})
-	plainErr := huma.NewError(http.StatusUnprocessableEntity, "validation failed", errors.New("plain field err"))
-	raw, err := json.Marshal(plainErr)
-	if err != nil {
-		t.Fatalf("marshal huma error: %v", err)
-	}
-	if !strings.Contains(string(raw), `"plain field err"`) {
-		t.Fatalf("expected serialized error detail message in %s", string(raw))
-	}
-}
-
 func TestRouter_Health(t *testing.T) {
 	t.Parallel()
 
@@ -755,7 +731,7 @@ func TestRouter_Health(t *testing.T) {
 		t.Fatalf("GET /health on error = %d %s, want 503 unhealthy", recFail.Code, recFail.Body.String())
 	}
 
-	nilDBRouter := handler.NewRouter(handler.RouterDeps{})
+	nilDBRouter := routes.NewRouter(routes.RouterDeps{})
 	recNilDB := doJSONReq(t, nilDBRouter, http.MethodGet, "/health", nil)
 	if recNilDB.Code != http.StatusServiceUnavailable {
 		t.Fatalf("GET /health with nil DB = %d, want 503", recNilDB.Code)
@@ -1331,7 +1307,10 @@ func TestRouter_DemoHeaderAuthAndErrorSafety(t *testing.T) {
 		t.Fatalf("oversized payload status = %d, want 413 (body=%s)", hugeRec.Code, hugeRec.Body.String())
 	}
 
-	nilAuthRouter := handler.NewRouter(handler.RouterDeps{AllowDemoHeaderAuth: true})
+	nilAuthRouter := routes.NewRouter(routes.RouterDeps{
+		Orders:              handler.NewOrderHandler(service.NewOrderService(newMemOrderRepo(newMemEventRepo()), newMemEventRepo()), slog.New(slog.DiscardHandler)),
+		AllowDemoHeaderAuth: true,
+	})
 	nilAuthRec := doJSONReq(t, nilAuthRouter, http.MethodGet, "/api/v1/orders", nil,
 		[2]string{"X-User-ID", uuid.New().String()},
 		[2]string{"X-User-Role", "BUYER"},
@@ -1351,14 +1330,22 @@ func TestRouter_PanicLogsAccessAndRecoveryWithRequestID(t *testing.T) {
 	orders := newMemOrderRepo(events)
 	orders.panicOn = true
 
-	r := handler.NewRouter(handler.RouterDeps{
-		Logger:              slog.New(slog.NewJSONHandler(&logBuf, nil)),
-		DB:                  &fakePinger{},
-		AuthService:         service.NewAuthService(users, testJWTSecret),
-		EventService:        service.NewEventService(events, orders),
-		OrderService:        service.NewOrderService(orders, events),
-		PaymentService:      service.NewPaymentService(orders, &memWebhookRepo{}, events, testWebhookSecret),
-		DemoService:         service.NewDemoService(users, events, service.NewOrderService(orders, events)),
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	authSvc := service.NewAuthService(users, testJWTSecret)
+	eventSvc := service.NewEventService(events, orders)
+	orderSvc := service.NewOrderService(orders, events)
+	paymentSvc := service.NewPaymentService(orders, &memWebhookRepo{}, events, testWebhookSecret)
+	demoSvc := service.NewDemoService(users, events, orderSvc)
+
+	r := routes.NewRouter(routes.RouterDeps{
+		Logger:              logger,
+		Authenticator:       authSvc,
+		System:              handler.NewSystemHandler(&fakePinger{}, logger),
+		Auth:                handler.NewAuthHandler(authSvc, logger),
+		Events:              handler.NewEventHandler(eventSvc, logger),
+		Orders:              handler.NewOrderHandler(orderSvc, logger),
+		Webhooks:            handler.NewWebhookHandler(paymentSvc, logger),
+		Demo:                handler.NewDemoHandler(demoSvc, logger),
 		AllowDemoHeaderAuth: true,
 	})
 
@@ -1446,8 +1433,8 @@ func TestRouter_CORS(t *testing.T) {
 	t.Run("honors custom CORSAllowedOrigins in RouterDeps", func(t *testing.T) {
 		t.Parallel()
 
-		r := handler.NewRouter(handler.RouterDeps{
-			DB:                 &fakePinger{},
+		r := routes.NewRouter(routes.RouterDeps{
+			System:             handler.NewSystemHandler(&fakePinger{}, nil),
 			CORSAllowedOrigins: []string{"https://tickets.example.com"},
 		})
 

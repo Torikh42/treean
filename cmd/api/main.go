@@ -18,6 +18,7 @@ import (
 	"github.com/torikh42/treean/internal/config"
 	"github.com/torikh42/treean/internal/handler"
 	"github.com/torikh42/treean/internal/repository"
+	"github.com/torikh42/treean/internal/routes"
 	"github.com/torikh42/treean/internal/service"
 	"github.com/torikh42/treean/internal/worker"
 )
@@ -110,14 +111,16 @@ func buildHandler(logger *slog.Logger, cfg config.Config, pool *pgxpool.Pool) ht
 		db = pool
 	}
 
-	return handler.NewRouter(handler.RouterDeps{
-		Logger:              safeLogger(logger),
-		DB:                  db,
-		AuthService:         authSvc,
-		EventService:        eventSvc,
-		OrderService:        orderSvc,
-		PaymentService:      paymentSvc,
-		DemoService:         demoSvc,
+	log := safeLogger(logger)
+	return routes.NewRouter(routes.RouterDeps{
+		Logger:              log,
+		Authenticator:       authSvc,
+		System:              handler.NewSystemHandler(db, log),
+		Auth:                handler.NewAuthHandler(authSvc, log),
+		Events:              handler.NewEventHandler(eventSvc, log),
+		Orders:              handler.NewOrderHandler(orderSvc, log),
+		Webhooks:            handler.NewWebhookHandler(paymentSvc, log),
+		Demo:                handler.NewDemoHandler(demoSvc, log),
 		AllowDemoHeaderAuth: cfg.AllowDemoHeaderAuth,
 		CORSAllowedOrigins:  cfg.CORSAllowedOrigins,
 	})

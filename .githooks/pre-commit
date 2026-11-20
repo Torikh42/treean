@@ -1,0 +1,72 @@
+#!/usr/bin/env sh
+set -eu
+
+staged_files=$(git diff --cached --name-only --diff-filter=ACM)
+if [ -z "$staged_files" ]; then
+  exit 0
+fi
+
+# 1. Block accidental commits of local secret/env files.
+for f in $staged_files; do
+  case "$f" in
+    .env|.env.local|.env.*.local)
+      echo "pre-commit: refusing to commit local environment file: $f"
+      exit 1
+      ;;
+  esac
+done
+
+go_files=$(printf '%s\n' "$staged_files" | grep -E '\.go$' || true)
+go_mod_changed=$(printf '%s\n' "$staged_files" | grep -E '^(go\.mod|go\.sum)$' || true)
+frontend_changed=$(printf '%s\n' "$staged_files" | grep -E '^frontend/' || true)
+compose_changed=$(printf '%s\n' "$staged_files" | grep -E '^docker-compose\.yml$' || true)
+
+# 2. Go formatting, static analysis, and integration-tag vet checks.
+if [ -n "$go_files" ] || [ -n "$go_mod_changed" ]; then
+  if [ -n "$go_files" ]; then
+    echo "pre-commit: checking gofmt on staged Go files..."
+    unformatted=0
+    for f in $go_files; do
+      tmp_orig=$(mktemp)
+      tmp_fmt=$(mktemp)
+      git show ":$f" | tr -d '\r' > "$tmp_orig"
+      gofmt -s < "$tmp_orig" > "$tmp_fmt"
+      if ! cmp -s "$tmp_orig" "$tmp_fmt"; then
+        echo "  - needs gofmt: $f (run: gofmt -s -w \"$f\")"
+        unformatted=1
+      fi
+      rm -f "$tmp_orig" "$tmp_fmt"
+    done
+    if [ "$unformatted" -ne 0 ]; then
+      echo "pre-commit: fix gofmt formatting before committing."
+      exit 1
+    fi
+  fi
+
+  echo "pre-commit: running go vet..."
+  go vet ./...
+  go vet -tags=integration ./tests/...
+
+  if command -v golangci-lint >/dev/null 2>&1; then
+    echo "pre-commit: running golangci-lint..."
+    golangci-lint run ./...
+  fi
+fi
+
+# 3. Frontend lint (oxlint) & strict composite typecheck (tsc -b --noEmit).
+if [ -n "$frontend_changed" ]; then
+  if [ -d "frontend/node_modules" ]; then
+    echo "pre-commit: running frontend lint & typecheck..."
+    (cd frontend && bun run lint && bun run typecheck)
+  else
+    echo "pre-commit: skipping frontend lint/typecheck (run 'cd frontend && bun install' first)."
+  fi
+fi
+
+# 4. Docker Compose validation.
+if [ -n "$compose_changed" ] && command -v docker >/dev/null 2>&1; then
+  echo "pre-commit: validating docker-compose.yml..."
+  docker compose config --quiet
+fi
+
+echo "pre-commit: all checks passed."

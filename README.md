@@ -24,9 +24,10 @@ This monorepo pairs the Go backend REST API (`go1.26.2`) with a React + Vite + T
 ├── internal/
 │   ├── config/              # Env config loader, validation, and slog secret redaction
 │   ├── domain/              # Pure entities, state machine (CanPay/CanCancel), SHA-512 & error codes
-│   ├── handler/             # Huma v2 + Chi routes, error mapping, /health, /docs, /openapi.json, /demo
+│   ├── handler/             # HTTP/Huma controllers, request DTOs, and service error mapping
 │   ├── middleware/          # slog request logging, panic Recoverer, 1 MiB body limit, JWT + demo header auth
 │   ├── repository/          # pgxpool PostgreSQL repos, locking SQL, advisory-locked SQL migrator
+│   ├── routes/              # Chi router, OpenAPI v2 + Scalar setup, and domain route registration
 │   ├── service/             # Business use cases and consumer-defined repository interfaces
 │   └── worker/              # Background ExpirySweeper ticker (FOR UPDATE SKIP LOCKED)
 ├── frontend/                # React 19 + Vite + TanStack Router/Query/Form + @hey-api/openapi-ts (Nginx container)
@@ -246,9 +247,10 @@ make test-integration
 - `TestIntegration_WebhookIdempotency_10ParallelReplays`: 10 concurrent identical signed webhooks returning `200 OK` (`1` `PROCESSED_PAID`, `9` `IGNORED_DUPLICATE`) with exact `4` issued tickets.
 - `TestIntegration_FlashSale_200ConcurrentBuyers_ZeroOversell`: 200 concurrent distinct buyers racing for 100 `Reguler` tickets (`100` `201 Created`, `100` `409 Conflict`, DB `SUM(total_tickets) == 100`, `remaining_quota == 0`).
 
-Formatting, linting, and binary build:
+Formatting, linting, and pre-commit hook setup:
 
 ```bash
+make hooks # Activates .githooks/pre-commit (env guard, gofmt, go vet, frontend lint & typecheck)
 make fmt
 make lint
 make build
