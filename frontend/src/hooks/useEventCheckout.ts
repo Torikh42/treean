@@ -7,9 +7,11 @@ import {
   getEventOptions,
   getEventQueryKey,
   listEventsQueryKey,
+  listMyOrdersOptions,
   listMyOrdersQueryKey,
 } from "@/lib/api/generated/@tanstack/react-query.gen";
-import { parseApiError, type ParsedApiError } from "@/lib/api/errors";
+import { computeExistingEventTickets, computeRemainingBuyerAllowance } from "@/lib/allowance";
+import { toastApiError, type ParsedApiError } from "@/lib/api/errors";
 import { getActiveRole, isAuthenticated, useAuthStore } from "@/store/auth-store";
 
 export const MAX_TICKETS_PER_ORDER = 4;
@@ -20,10 +22,23 @@ export function useEventCheckout(eventId: string) {
   const auth = useAuthStore();
   const authenticated = isAuthenticated(auth);
   const activeRole = getActiveRole(auth);
+  const isBuyer = authenticated && activeRole === "BUYER";
+
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [submitError, setSubmitError] = useState<ParsedApiError | null>(null);
 
   const eventQuery = useQuery(getEventOptions({ path: { id: eventId } }));
+  const myOrdersQuery = useQuery({
+    ...listMyOrdersOptions(),
+    enabled: isBuyer,
+  });
+
+  const existingEventTickets = isBuyer
+    ? computeExistingEventTickets(myOrdersQuery.data, eventId)
+    : 0;
+  const remainingAllowance = isBuyer
+    ? computeRemainingBuyerAllowance(myOrdersQuery.data, eventId, MAX_TICKETS_PER_ORDER)
+    : MAX_TICKETS_PER_ORDER;
 
   const createMut = useMutation({
     ...createOrderMutation(),
@@ -37,9 +52,10 @@ export function useEventCheckout(eventId: string) {
       void navigate({ to: "/orders/$orderId", params: { orderId: order.id } });
     },
     onError: (err) => {
-      const parsed = parseApiError(err);
+      const parsed = toastApiError(err);
       setSubmitError(parsed);
-      toast.error(`${parsed.code}: ${parsed.detail}`);
+      void queryClient.invalidateQueries({ queryKey: listMyOrdersQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: getEventQueryKey({ path: { id: eventId } }) });
     },
   });
 
@@ -55,7 +71,7 @@ export function useEventCheckout(eventId: string) {
     setQuantities((prev) => {
       const current = prev[tierId] ?? 0;
       const otherSelected = totalSelected - current;
-      const maxAllowedForTier = Math.min(maxQuota, MAX_TICKETS_PER_ORDER - otherSelected);
+      const maxAllowedForTier = Math.min(maxQuota, remainingAllowance - otherSelected);
       const next = Math.max(0, Math.min(maxAllowedForTier, current + delta));
       return { ...prev, [tierId]: next };
     });
@@ -67,7 +83,9 @@ export function useEventCheckout(eventId: string) {
         status: 401,
         code: "UNAUTHORIZED",
         detail: "Sign in as a Buyer account before reserving tickets.",
-        actionHint: "Use Sign In as Buyer to Reserve and authenticate with a Buyer account.",
+        userTitle: "Buyer sign in required",
+        userMessage: "Sign in with a Buyer account before reserving tickets.",
+        actionHint: "Use Sign In as Buyer to Reserve below.",
       });
       return;
     }
@@ -77,7 +95,9 @@ export function useEventCheckout(eventId: string) {
         status: 403,
         code: "FORBIDDEN",
         detail: "Ticket checkout requires a Buyer account.",
-        actionHint: "Organizer accounts cannot purchase buyer tickets. Sign in with a Buyer account.",
+        userTitle: "Buyer account required",
+        userMessage: "Organizer accounts cannot reserve or purchase tickets.",
+        actionHint: "Sign out and sign in with a Buyer account.",
       });
       return;
     }
@@ -91,7 +111,24 @@ export function useEventCheckout(eventId: string) {
         status: 422,
         code: "VALIDATION_ERROR",
         detail: "Select at least 1 ticket before submitting.",
-        actionHint: "Use + buttons on a tier with available quota.",
+        userTitle: "No tickets selected",
+        userMessage: "Select at least 1 ticket before reserving.",
+        actionHint: "Use + on a tier with available quota.",
+      });
+      return;
+    }
+
+    if (totalSelected > remainingAllowance) {
+      setSubmitError({
+        status: 409,
+        code: "BUYER_LIMIT_EXCEEDED",
+        detail: `active/paid=${existingEventTickets}, requested=${totalSelected}, max=${MAX_TICKETS_PER_ORDER}`,
+        userTitle: "Ticket limit reached for this event",
+        userMessage:
+          remainingAllowance === 0
+            ? `You already hold or purchased all ${MAX_TICKETS_PER_ORDER} allowed tickets for this event.`
+            : `You can only reserve ${remainingAllowance} more ticket(s) for this event (currently using ${existingEventTickets} of ${MAX_TICKETS_PER_ORDER}).`,
+        actionHint: "Lower your selected quantity or cancel an unpaid order in My Orders.",
       });
       return;
     }
@@ -109,6 +146,8 @@ export function useEventCheckout(eventId: string) {
     tiers,
     authenticated,
     activeRole,
+    existingEventTickets,
+    remainingAllowance,
     isLoading: eventQuery.isLoading,
     error: eventQuery.error,
     refetch: eventQuery.refetch,

@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, CreditCard, Ticket, XCircle } from "@phosphor-icons/react";
 import type { Order } from "@/lib/api/generated/types.gen";
+import type { ParsedApiError } from "@/lib/api/errors";
 import { parseApiError } from "@/lib/api/errors";
 import { formatDateTime, formatIDR } from "@/lib/format";
 import { BrutalButton } from "@/components/ui/BrutalButton";
@@ -11,7 +12,9 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 interface OrderDetailCardProps {
   order: Order | undefined;
   isLoading: boolean;
+  isFetching?: boolean;
   error: unknown;
+  actionError?: ParsedApiError | null;
   onRetry: () => void;
   countdown: { formatted: string; isExpired: boolean };
   onPay: () => void;
@@ -23,7 +26,9 @@ interface OrderDetailCardProps {
 export function OrderDetailCard({
   order,
   isLoading,
+  isFetching = false,
   error,
+  actionError = null,
   onRetry,
   countdown,
   onPay,
@@ -104,13 +109,42 @@ export function OrderDetailCard({
           ))}
         </div>
 
+        {isWaiting && countdown.isExpired && (
+          <div className="mt-4">
+            <StateNotice
+              kind="empty"
+              title="Reservation window ended"
+              detail="This 15-minute payment hold has passed. Refresh to sync final expired status and released ticket quota."
+              action={
+                <BrutalButton variant="signal" disabled={isFetching} onClick={onRetry}>
+                  {isFetching ? "Refreshing..." : "Refresh Order Status"}
+                </BrutalButton>
+              }
+            />
+          </div>
+        )}
+
+        {actionError && (
+          <div className="mt-4">
+            <StateNotice kind="error" title="Order action failed" error={actionError} onRetry={onRetry} />
+          </div>
+        )}
+
         {isWaiting && (
           <div className="mt-5 flex flex-wrap gap-3">
-            <BrutalButton variant="signal" disabled={isPaying || isCancelling} onClick={onPay}>
+            <BrutalButton
+              variant="signal"
+              disabled={countdown.isExpired || isPaying || isCancelling}
+              onClick={onPay}
+            >
               <CreditCard size={16} weight="bold" />
               {isPaying ? "Signing & Settling..." : "Pay Now (Signed Demo Webhook)"}
             </BrutalButton>
-            <BrutalButton variant="danger" disabled={isPaying || isCancelling} onClick={onCancel}>
+            <BrutalButton
+              variant="danger"
+              disabled={countdown.isExpired || isPaying || isCancelling}
+              onClick={onCancel}
+            >
               <XCircle size={16} weight="bold" />
               {isCancelling ? "Cancelling..." : "Cancel Order & Restore Quota"}
             </BrutalButton>
