@@ -210,7 +210,7 @@ func TestFiles_OrderedSQLAssets(t *testing.T) {
 		got = append(got, entry.Name())
 	}
 
-	want := []string{"001_init_schema.sql", "002_seed_demo.sql"}
+	want := []string{"001_init_schema.sql", "002_seed_demo.sql", "003_order_idempotency.sql"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("embedded migration files = %v, want %v", got, want)
 	}
@@ -529,4 +529,22 @@ func TestSeedDemoSQL_BcryptAndFixtures(t *testing.T) {
 		}
 		assertContainsAll(t, "ticket_types insert", stmt, []string{"'Reguler'", "150000", "80", "'VIP'", "350000", "20"})
 	})
+}
+
+func TestOrderIdempotencyMigrationSQL(t *testing.T) {
+	t.Parallel()
+
+	raw := readEmbeddedSQL(t, "003_order_idempotency.sql")
+	stmts := splitSQLStatements(raw)
+	_, indexes, _ := parseSchemaStatements(t, stmts)
+
+	joined := strings.Join(stmts, "\n")
+	if !strings.Contains(joined, "ADD COLUMN IF NOT EXISTS idempotency_key TEXT NULL") {
+		t.Fatalf("missing idempotency_key column DDL: %s", joined)
+	}
+	idx, ok := indexes["uidx_orders_buyer_idempotency_key"]
+	if !ok {
+		t.Fatalf("missing uidx_orders_buyer_idempotency_key unique index in %v", indexes)
+	}
+	assertContainsAll(t, "idempotency unique index", idx, []string{"orders (buyer_id, idempotency_key)", "WHERE idempotency_key IS NOT NULL"})
 }

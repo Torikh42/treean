@@ -12,33 +12,44 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/torikh42/treean/internal/domain"
 )
 
 const (
-	defaultExpiryBatchLimit = 50
-	actorTypeBuyer          = "buyer"
-	actorTypeWebhook        = "webhook"
-	actorTypeScheduler      = "scheduler"
-	actorTypeLazyCheck      = "lazy-check"
-	errMsgOrderNotFound     = "order not found"
-	errMsgBuyerIDRequired   = "buyer_id is required"
-	buyerCancelReason       = "cancelled by buyer before payment"
-	expiryReasonScheduler   = "payment deadline (15m) expired automatically"
-	expiryReasonLazy        = "payment deadline (15m) expired"
-	defaultFailureReason    = "payment failed by gateway"
-	maxFailureReasonRunes   = 255
-	orderSelectColumns      = "id, invoice_number, event_id, buyer_id, total_tickets, total_amount_idr, status, expires_at, paid_at, cancelled_at, expired_at, cancelled_reason, created_at"
+	defaultExpiryBatchLimit  = 50
+	maxIdempotencyKeyRunes   = 128
+	pgUniqueViolationSQLCode = "23505"
+	idempotencyIndexName     = "uidx_orders_buyer_idempotency_key"
+	actorTypeBuyer           = "buyer"
+	actorTypeWebhook         = "webhook"
+	actorTypeScheduler       = "scheduler"
+	actorTypeLazyCheck       = "lazy-check"
+	errMsgOrderNotFound      = "order not found"
+	errMsgBuyerIDRequired    = "buyer_id is required"
+	buyerCancelReason        = "cancelled by buyer before payment"
+	expiryReasonScheduler    = "payment deadline (15m) expired automatically"
+	expiryReasonLazy         = "payment deadline (15m) expired"
+	defaultFailureReason     = "payment failed by gateway"
+	maxFailureReasonRunes    = 255
+	orderSelectColumns       = "id, invoice_number, event_id, buyer_id, idempotency_key, total_tickets, total_amount_idr, status, expires_at, paid_at, cancelled_at, expired_at, cancelled_reason, created_at"
 )
 
 // CheckoutItemInput specifies one ticket tier and desired quantity in an order creation request.
 type CheckoutItemInput struct {
 	TicketTypeID uuid.UUID
 	Quantity     int32
+}
+
+// CreateOrderResult captures a created or idempotently replayed order reservation.
+type CreateOrderResult struct {
+	Order            *domain.Order
+	IdempotentReplay bool
 }
 
 // PaymentConfirmResult captures whether payment transitioned an order or replayed idempotently.
@@ -66,10 +77,30 @@ type lockedTier struct {
 
 type queryRunner interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // CreateOrder executes dual-locked multi-item ticket reservation with 15-minute expiry.
 func (r *OrderRepo) CreateOrder(ctx context.Context, eventID, buyerID uuid.UUID, items []CheckoutItemInput, now time.Time) (*domain.Order, error) {
+	res, err := r.CreateOrderIdempotent(ctx, eventID, buyerID, items, "", now)
+	if err != nil {
+		return nil, err
+	}
+	return res.Order, nil
+}
+
+// CreateOrderIdempotent reserves tickets atomically and replays an existing order if idempotencyKey matches.
+func (r *OrderRepo) CreateOrderIdempotent(
+	ctx context.Context,
+	eventID, buyerID uuid.UUID,
+	items []CheckoutItemInput,
+	idempotencyKey string,
+	now time.Time,
+) (*CreateOrderResult, error) {
+	cleanKey, err := normalizeIdempotencyKey(idempotencyKey)
+	if err != nil {
+		return nil, err
+	}
 	cleanItems, requestedQty, nowUTC, err := r.prepareCreateOrder(ctx, eventID, buyerID, items, now)
 	if err != nil {
 		return nil, err
@@ -81,14 +112,24 @@ func (r *OrderRepo) CreateOrder(ctx context.Context, eventID, buyerID uuid.UUID,
 	}
 	defer rollbackTx(tx)
 
-	order, err := createOrderInTx(ctx, tx, eventID, buyerID, cleanItems, requestedQty, nowUTC)
+	res, err := createOrderInTx(ctx, tx, eventID, buyerID, cleanItems, requestedQty, cleanKey, nowUTC)
 	if err != nil {
+		if cleanKey != "" && isIdempotencyKeyConflict(err) {
+			rollbackTx(tx)
+			existing, lookupErr := r.findOrderByIdempotencyKey(ctx, buyerID, cleanKey)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if existing != nil {
+				return &CreateOrderResult{Order: existing, IdempotentReplay: true}, nil
+			}
+		}
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing create order tx: %w", err)
 	}
-	return order, nil
+	return res, nil
 }
 
 func (r *OrderRepo) prepareCreateOrder(
@@ -131,13 +172,23 @@ func createOrderInTx(
 	eventID, buyerID uuid.UUID,
 	cleanItems []CheckoutItemInput,
 	requestedQty int32,
+	cleanKey string,
 	nowUTC time.Time,
-) (*domain.Order, error) {
+) (*CreateOrderResult, error) {
 	if err := ensureEventExists(ctx, tx, eventID); err != nil {
 		return nil, err
 	}
 	if err := acquireBuyerEventLock(ctx, tx, eventID, buyerID); err != nil {
 		return nil, err
+	}
+	if cleanKey != "" {
+		existing, err := findOrderByIdempotencyKeyInTx(ctx, tx, buyerID, cleanKey)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return &CreateOrderResult{Order: existing, IdempotentReplay: true}, nil
+		}
 	}
 	if err := checkBuyerAllowance(ctx, tx, eventID, buyerID, requestedQty); err != nil {
 		return nil, err
@@ -154,7 +205,11 @@ func createOrderInTx(
 	if err := decrementTicketQuotas(ctx, tx, cleanItems); err != nil {
 		return nil, err
 	}
-	return persistCreatedOrder(ctx, tx, eventID, buyerID, requestedQty, totalAmount, orderItems, nowUTC)
+	order, err := persistCreatedOrder(ctx, tx, eventID, buyerID, cleanKey, requestedQty, totalAmount, orderItems, nowUTC)
+	if err != nil {
+		return nil, err
+	}
+	return &CreateOrderResult{Order: order, IdempotentReplay: false}, nil
 }
 
 // CancelOrder cancels an unpaid order, restores quota atomically, and rejects expired or paid orders.
@@ -257,73 +312,85 @@ func (r *OrderRepo) ConfirmPayment(ctx context.Context, orderID uuid.UUID, gross
 
 // FailPayment transitions a WAITING_PAYMENT order to EXPIRED or CANCELLED and releases quota on gateway failure notification.
 func (r *OrderRepo) FailPayment(ctx context.Context, orderID uuid.UUID, reason string, now time.Time) (domain.WebhookOutcome, error) {
+	outcome, _, err := r.FailPaymentWithEvent(ctx, orderID, reason, now)
+	return outcome, err
+}
+
+// FailPaymentWithEvent transitions an unpaid order on gateway failure and returns the affected event ID when transitioned.
+func (r *OrderRepo) FailPaymentWithEvent(ctx context.Context, orderID uuid.UUID, reason string, now time.Time) (domain.WebhookOutcome, uuid.UUID, error) {
 	if err := validateRepoCall(ctx, r, "failing payment"); err != nil {
-		return "", err
+		return "", uuid.Nil, err
 	}
 	if err := requireTimestamp("failing payment", now); err != nil {
-		return "", err
+		return "", uuid.Nil, err
 	}
 	if orderID == uuid.Nil {
-		return "", domain.NewDomainError(http.StatusNotFound, domain.ErrCodeOrderNotFound, errMsgOrderNotFound)
+		return "", uuid.Nil, domain.NewDomainError(http.StatusNotFound, domain.ErrCodeOrderNotFound, errMsgOrderNotFound)
 	}
 	if err := requireRepoPool(r, "failing payment"); err != nil {
-		return "", err
+		return "", uuid.Nil, err
 	}
 
 	nowUTC := now.UTC()
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("beginning fail payment tx: %w", err)
+		return "", uuid.Nil, fmt.Errorf("beginning fail payment tx: %w", err)
 	}
 	defer rollbackTx(tx)
 
 	order, err := lockOrderForUpdate(ctx, tx, orderID)
 	if err != nil {
-		return "", err
+		return "", uuid.Nil, err
 	}
 
 	switch order.Status {
 	case domain.OrderStatusPaid, domain.OrderStatusExpired, domain.OrderStatusCancelled:
 		if err := tx.Commit(ctx); err != nil {
-			return "", fmt.Errorf("committing terminal fail payment check: %w", err)
+			return "", uuid.Nil, fmt.Errorf("committing terminal fail payment check: %w", err)
 		}
-		return domain.OutcomeIgnoredDuplicate, nil
+		return domain.OutcomeIgnoredDuplicate, uuid.Nil, nil
 	case domain.OrderStatusWaitingPayment:
 		// Waiting payment order can transition below.
 	default:
-		return "", fmt.Errorf("failing payment: unexpected order status %q", order.Status)
+		return "", uuid.Nil, fmt.Errorf("failing payment: unexpected order status %q", order.Status)
 	}
 
 	cleanReason := normalizeFailureReason(reason)
 	targetStatus, err := classifyFailureTransition(order, cleanReason, nowUTC)
 	if err != nil {
-		return "", err
+		return "", uuid.Nil, err
 	}
 	if err := restockAndTransitionOrder(ctx, tx, order, targetStatus, nil, actorTypeWebhook, cleanReason, nowUTC); err != nil {
-		return "", err
+		return "", uuid.Nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("committing fail payment tx: %w", err)
+		return "", uuid.Nil, fmt.Errorf("committing fail payment tx: %w", err)
 	}
-	return domain.OutcomeProcessedFailed, nil
+	return domain.OutcomeProcessedFailed, order.EventID, nil
 }
 
 // ExpireDueOrders sweeps up to limit overdue WAITING_PAYMENT orders, optionally scoped to one event.
 func (r *OrderRepo) ExpireDueOrders(ctx context.Context, eventID *uuid.UUID, limit int, actorType string, now time.Time) (int, error) {
+	count, _, err := r.ExpireDueOrdersWithEvents(ctx, eventID, limit, actorType, now)
+	return count, err
+}
+
+// ExpireDueOrdersWithEvents sweeps overdue WAITING_PAYMENT orders and returns the count and affected event IDs.
+func (r *OrderRepo) ExpireDueOrdersWithEvents(ctx context.Context, eventID *uuid.UUID, limit int, actorType string, now time.Time) (int, []uuid.UUID, error) {
 	if err := validateRepoCall(ctx, r, "expiring due orders"); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := requireTimestamp("expiring due orders", now); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := validateExpiryActor(actorType); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if eventID != nil && *eventID == uuid.Nil {
-		return 0, errors.New("expiring due orders: event_id cannot be nil UUID")
+		return 0, nil, errors.New("expiring due orders: event_id cannot be nil UUID")
 	}
 	if err := requireRepoPool(r, "expiring due orders"); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if limit <= 0 {
 		limit = defaultExpiryBatchLimit
@@ -332,26 +399,26 @@ func (r *OrderRepo) ExpireDueOrders(ctx context.Context, eventID *uuid.UUID, lim
 	nowUTC := now.UTC()
 	hasDue, err := r.hasDueOrders(ctx, eventID, nowUTC)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if !hasDue {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("beginning expire due orders tx: %w", err)
+		return 0, nil, fmt.Errorf("beginning expire due orders tx: %w", err)
 	}
 	defer rollbackTx(tx)
 
-	count, err := expireDueOrdersInTx(ctx, tx, eventID, limit, actorType, nowUTC)
+	count, touchedEvents, err := expireDueOrdersInTx(ctx, tx, eventID, limit, actorType, nowUTC)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("committing expire due orders tx: %w", err)
+		return 0, nil, fmt.Errorf("committing expire due orders tx: %w", err)
 	}
-	return count, nil
+	return count, touchedEvents, nil
 }
 
 // FindByID loads a full order including items, tickets, and transition logs in a repeatable-read snapshot.
@@ -667,6 +734,7 @@ func persistCreatedOrder(
 	tx pgx.Tx,
 	eventID uuid.UUID,
 	buyerID uuid.UUID,
+	cleanKey string,
 	requestedQty int32,
 	totalAmount int64,
 	orderItems []domain.OrderItem,
@@ -681,13 +749,19 @@ func persistCreatedOrder(
 	orderID := uuid.New()
 	expiresAt := nowUTC.Add(domain.OrderHoldDuration)
 	const insertOrderSQL = `
-		INSERT INTO orders (id, invoice_number, event_id, buyer_id, total_tickets, total_amount_idr, status, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+		INSERT INTO orders (id, invoice_number, event_id, buyer_id, idempotency_key, total_tickets, total_amount_idr, status, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8, $9, $10)`
 	if _, err := tx.Exec(ctx, insertOrderSQL,
-		orderID, invoiceNumber, eventID, buyerID, requestedQty, totalAmount,
+		orderID, invoiceNumber, eventID, buyerID, cleanKey, requestedQty, totalAmount,
 		string(domain.OrderStatusWaitingPayment), expiresAt, nowUTC,
 	); err != nil {
 		return nil, fmt.Errorf("inserting order: %w", err)
+	}
+
+	var keyPtr *string
+	if cleanKey != "" {
+		k := cleanKey
+		keyPtr = &k
 	}
 
 	const insertItemSQL = `
@@ -723,6 +797,7 @@ func persistCreatedOrder(
 		InvoiceNumber:  invoiceNumber,
 		EventID:        eventID,
 		BuyerID:        buyerID,
+		IdempotencyKey: keyPtr,
 		TotalTickets:   requestedQty,
 		TotalAmountIDR: totalAmount,
 		Status:         domain.OrderStatusWaitingPayment,
@@ -876,15 +951,15 @@ func lockOrderForUpdate(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) (*dom
 	return &o, nil
 }
 
-func expireDueOrdersInTx(ctx context.Context, tx pgx.Tx, eventID *uuid.UUID, limit int, actorType string, nowUTC time.Time) (int, error) {
-	dueIDs, err := selectDueOrderIDsForUpdate(ctx, tx, eventID, limit, nowUTC)
+func expireDueOrdersInTx(ctx context.Context, tx pgx.Tx, eventID *uuid.UUID, limit int, actorType string, nowUTC time.Time) (int, []uuid.UUID, error) {
+	dueIDs, touchedEvents, err := selectDueOrderIDsForUpdate(ctx, tx, eventID, limit, nowUTC)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if err := expireOrderIDsInTx(ctx, tx, dueIDs, actorType, expiryReasonScheduler, nowUTC); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return len(dueIDs), nil
+	return len(dueIDs), touchedEvents, nil
 }
 
 func expireOrderIDsInTx(ctx context.Context, tx pgx.Tx, orderIDs []uuid.UUID, actorType, reason string, nowUTC time.Time) error {
@@ -912,12 +987,12 @@ func expireOrderIDsInTx(ctx context.Context, tx pgx.Tx, orderIDs []uuid.UUID, ac
 	return nil
 }
 
-func selectDueOrderIDsForUpdate(ctx context.Context, tx pgx.Tx, eventID *uuid.UUID, limit int, nowUTC time.Time) ([]uuid.UUID, error) {
+func selectDueOrderIDsForUpdate(ctx context.Context, tx pgx.Tx, eventID *uuid.UUID, limit int, nowUTC time.Time) ([]uuid.UUID, []uuid.UUID, error) {
 	var rows pgx.Rows
 	var err error
 	if eventID != nil {
 		const sqlByEvent = `
-			SELECT id FROM orders
+			SELECT id, event_id FROM orders
 			WHERE event_id = $1 AND status = 'WAITING_PAYMENT' AND expires_at < $2
 			ORDER BY id ASC
 			FOR UPDATE SKIP LOCKED
@@ -925,7 +1000,7 @@ func selectDueOrderIDsForUpdate(ctx context.Context, tx pgx.Tx, eventID *uuid.UU
 		rows, err = tx.Query(ctx, sqlByEvent, *eventID, nowUTC, limit)
 	} else {
 		const sqlGlobal = `
-			SELECT id FROM orders
+			SELECT id, event_id FROM orders
 			WHERE status = 'WAITING_PAYMENT' AND expires_at < $1
 			ORDER BY id ASC
 			FOR UPDATE SKIP LOCKED
@@ -933,9 +1008,32 @@ func selectDueOrderIDsForUpdate(ctx context.Context, tx pgx.Tx, eventID *uuid.UU
 		rows, err = tx.Query(ctx, sqlGlobal, nowUTC, limit)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("selecting overdue orders: %w", err)
+		return nil, nil, fmt.Errorf("selecting overdue orders: %w", err)
 	}
-	return scanUUIDRows(rows, "overdue order id")
+	return scanDueOrderAndEventRows(rows)
+}
+
+func scanDueOrderAndEventRows(rows pgx.Rows) ([]uuid.UUID, []uuid.UUID, error) {
+	defer rows.Close()
+	var orderIDs []uuid.UUID
+	var eventIDs []uuid.UUID
+	seenEvents := make(map[uuid.UUID]struct{})
+	for rows.Next() {
+		var oid, eid uuid.UUID
+		if err := rows.Scan(&oid, &eid); err != nil {
+			return nil, nil, fmt.Errorf("scanning overdue order row: %w", err)
+		}
+		orderIDs = append(orderIDs, oid)
+		if _, dup := seenEvents[eid]; !dup && eid != uuid.Nil {
+			seenEvents[eid] = struct{}{}
+			eventIDs = append(eventIDs, eid)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterating overdue order rows: %w", err)
+	}
+	rows.Close()
+	return orderIDs, eventIDs, nil
 }
 
 func scanUUIDRows(rows pgx.Rows, label string) ([]uuid.UUID, error) {
@@ -1144,7 +1242,7 @@ func scanOrder(row pgx.Row) (domain.Order, error) {
 	var o domain.Order
 	var status string
 	err := row.Scan(
-		&o.ID, &o.InvoiceNumber, &o.EventID, &o.BuyerID, &o.TotalTickets, &o.TotalAmountIDR,
+		&o.ID, &o.InvoiceNumber, &o.EventID, &o.BuyerID, &o.IdempotencyKey, &o.TotalTickets, &o.TotalAmountIDR,
 		&status, &o.ExpiresAt, &o.PaidAt, &o.CancelledAt, &o.ExpiredAt, &o.CancelledReason, &o.CreatedAt,
 	)
 	if err != nil {
@@ -1152,6 +1250,60 @@ func scanOrder(row pgx.Row) (domain.Order, error) {
 	}
 	o.Status = domain.OrderStatus(status)
 	return o, nil
+}
+
+func normalizeIdempotencyKey(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	if utf8.RuneCountInString(trimmed) > maxIdempotencyKeyRunes {
+		return "", domain.NewDomainError(http.StatusUnprocessableEntity, domain.ErrCodeValidation, "Idempotency-Key must be at most 128 characters")
+	}
+	return trimmed, nil
+}
+
+func isIdempotencyKeyConflict(err error) bool {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
+		return pgErr.Code == pgUniqueViolationSQLCode && pgErr.ConstraintName == idempotencyIndexName
+	}
+	return false
+}
+
+func findOrderByIdempotencyKeyInTx(ctx context.Context, q queryRunner, buyerID uuid.UUID, key string) (*domain.Order, error) {
+	const sqlFind = "SELECT " + orderSelectColumns + " FROM orders WHERE buyer_id = $1 AND idempotency_key = $2"
+	row := q.QueryRow(ctx, sqlFind, buyerID, key)
+	o, err := scanOrder(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("looking up order by idempotency key: %w", err)
+	}
+	if err := loadOrderDetailsInTx(ctx, q, &o); err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+func (r *OrderRepo) findOrderByIdempotencyKey(ctx context.Context, buyerID uuid.UUID, key string) (*domain.Order, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("beginning idempotency lookup tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	existing, err := findOrderByIdempotencyKeyInTx(ctx, tx, buyerID, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing idempotency lookup tx: %w", err)
+	}
+	return existing, nil
 }
 
 func loadOrderItemsByOrderIDs(ctx context.Context, q queryRunner, orderIDs []uuid.UUID) (map[uuid.UUID][]domain.OrderItem, error) {

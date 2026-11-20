@@ -21,4 +21,16 @@ describe("parseApiError", () => {
     expect(parsed.code).toBe("NETWORK_ERROR");
     expect(parsed.detail).toBe("Failed to fetch");
   });
+
+  it("maps RATE_LIMITED (429) with retry guidance", () => {
+    const parsed = parseApiError({
+      title: "Too Many Requests",
+      status: 429,
+      detail: "rate limit exceeded; retry after 12 seconds",
+      error_code: "RATE_LIMITED",
+    });
+    expect(parsed.status).toBe(429);
+    expect(parsed.code).toBe("RATE_LIMITED");
+    expect(parsed.actionHint).toContain("wait");
+  });
 });

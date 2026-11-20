@@ -166,6 +166,8 @@ func mapHTTPStatusToErrorCode(status int) string {
 		return domain.ErrCodeForbidden
 	case http.StatusNotFound:
 		return "NOT_FOUND"
+	case http.StatusTooManyRequests:
+		return domain.ErrCodeRateLimited
 	case http.StatusInternalServerError:
 		return errCodeInternal
 	default:

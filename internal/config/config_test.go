@@ -11,17 +11,27 @@ import (
 )
 
 const (
-	testEnvDatabaseURL         = "DATABASE_URL"
-	testEnvJWTSecret           = "JWT_SECRET"
-	testEnvWebhookSecret       = "WEBHOOK_SECRET"
-	testEnvPort                = "PORT"
-	testEnvAllowDemoHeaderAuth = "ALLOW_DEMO_HEADER_AUTH"
-	testEnvExpirySweepInterval = "EXPIRY_SWEEP_INTERVAL"
-	testEnvHTTPReadTimeout     = "HTTP_READ_TIMEOUT"
-	testEnvHTTPWriteTimeout    = "HTTP_WRITE_TIMEOUT"
-	testEnvDBMaxConns          = "DB_MAX_CONNS"
-	testEnvDBMinConns          = "DB_MIN_CONNS"
-	testEnvCORSAllowedOrigins  = "CORS_ALLOWED_ORIGINS"
+	testEnvDatabaseURL           = "DATABASE_URL"
+	testEnvJWTSecret             = "JWT_SECRET"
+	testEnvWebhookSecret         = "WEBHOOK_SECRET"
+	testEnvPort                  = "PORT"
+	testEnvAllowDemoHeaderAuth   = "ALLOW_DEMO_HEADER_AUTH"
+	testEnvExpirySweepInterval   = "EXPIRY_SWEEP_INTERVAL"
+	testEnvHTTPReadTimeout       = "HTTP_READ_TIMEOUT"
+	testEnvHTTPWriteTimeout      = "HTTP_WRITE_TIMEOUT"
+	testEnvDBMaxConns            = "DB_MAX_CONNS"
+	testEnvDBMinConns            = "DB_MIN_CONNS"
+	testEnvCORSAllowedOrigins    = "CORS_ALLOWED_ORIGINS"
+	testEnvRedisURL              = "REDIS_URL"
+	testEnvRedisTimeout          = "REDIS_TIMEOUT"
+	testEnvEventCacheTTL         = "EVENT_CACHE_TTL"
+	testEnvRateLimitEnabled      = "RATE_LIMIT_ENABLED"
+	testEnvRateLimitRegisterMax  = "RATE_LIMIT_REGISTER_MAX"
+	testEnvRateLimitLoginMax     = "RATE_LIMIT_LOGIN_MAX"
+	testEnvRateLimitLoginIPMax   = "RATE_LIMIT_LOGIN_IP_MAX"
+	testEnvRateLimitOrderUserMax = "RATE_LIMIT_ORDER_USER_MAX"
+	testEnvRateLimitOrderIPMax   = "RATE_LIMIT_ORDER_IP_MAX"
+	testEnvRateLimitDemoMax      = "RATE_LIMIT_DEMO_FLASH_SALE_MAX"
 
 	testDatabaseURL   = "postgres://u:p@localhost:5432/db?sslmode=disable"
 	testJWTSecret     = "jwt-secret"
@@ -46,6 +56,16 @@ func clearOptionalEnv(t *testing.T) {
 		testEnvDBMaxConns,
 		testEnvDBMinConns,
 		testEnvCORSAllowedOrigins,
+		testEnvRedisURL,
+		testEnvRedisTimeout,
+		testEnvEventCacheTTL,
+		testEnvRateLimitEnabled,
+		testEnvRateLimitRegisterMax,
+		testEnvRateLimitLoginMax,
+		testEnvRateLimitLoginIPMax,
+		testEnvRateLimitOrderUserMax,
+		testEnvRateLimitOrderIPMax,
+		testEnvRateLimitDemoMax,
 	} {
 		t.Setenv(key, "")
 	}
@@ -130,6 +150,13 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	if !slices.Equal(cfg.CORSAllowedOrigins, wantDefaultOrigins) {
 		t.Fatalf("CORSAllowedOrigins = %v, want %v", cfg.CORSAllowedOrigins, wantDefaultOrigins)
+	}
+	if cfg.RedisURL != "" || cfg.RedisTimeout != 500*time.Millisecond || cfg.EventCacheTTL != 3*time.Second || !cfg.RateLimitEnabled {
+		t.Fatalf("unexpected default redis/rate-limit config: %+v", cfg)
+	}
+	if cfg.RateLimitRegisterMax != 5 || cfg.RateLimitLoginMax != 10 || cfg.RateLimitLoginIPMax != 60 ||
+		cfg.RateLimitOrderUserMax != 20 || cfg.RateLimitOrderIPMax != 300 || cfg.RateLimitDemoFlashSaleMax != 5 {
+		t.Fatalf("unexpected default rate limit thresholds: %+v", cfg)
 	}
 }
 
@@ -314,6 +341,7 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 		DatabaseURL:         "postgres://secret_user:super_secret_pass@db:5432/prod",
 		JWTSecret:           "super-secret-jwt-key",
 		WebhookSecret:       "super-secret-webhook-key",
+		RedisURL:            "redis://:super-secret-redis-pass@redis:6379/0",
 		AllowDemoHeaderAuth: true,
 		ExpirySweepInterval: 5 * time.Second,
 		HTTPReadTimeout:     15 * time.Second,
@@ -328,7 +356,7 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 	logger.Info("config loaded", slog.Any("config", cfg))
 
 	rawOut := buf.String()
-	for _, secret := range []string{cfg.DatabaseURL, cfg.JWTSecret, cfg.WebhookSecret} {
+	for _, secret := range []string{cfg.DatabaseURL, cfg.JWTSecret, cfg.WebhookSecret, cfg.RedisURL} {
 		if strings.Contains(rawOut, secret) {
 			t.Fatalf("log output leaked secret %q: %s", secret, rawOut)
 		}

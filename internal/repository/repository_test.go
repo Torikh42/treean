@@ -78,7 +78,7 @@ func TestCollectMigrationFiles(t *testing.T) {
 			t.Fatalf("collectMigrationFiles(migrations.Files) error = %v", err)
 		}
 
-		want := []string{"001_init_schema.sql", "002_seed_demo.sql"}
+		want := []string{"001_init_schema.sql", "002_seed_demo.sql", "003_order_idempotency.sql"}
 		if !slices.Equal(got, want) {
 			t.Fatalf("collectMigrationFiles(migrations.Files) = %v, want %v", got, want)
 		}

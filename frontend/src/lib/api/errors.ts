@@ -21,6 +21,7 @@ const ACTION_HINTS: Record<string, string> = {
   INVALID_CREDENTIALS: "Check your email and password and try again.",
   UNAUTHORIZED_WEBHOOK: "Ensure signature_key matches SHA512(order_id + status_code + gross_amount + WEBHOOK_SECRET).",
   PAYMENT_AMOUNT_MISMATCH: "Match gross_amount exactly with the order total IDR.",
+  RATE_LIMITED: "Too many requests right now. Please wait a moment and try again.",
   VALIDATION_ERROR: "Check highlighted input fields and try again.",
 };
 

@@ -31,6 +31,7 @@ type Order struct {
 	InvoiceNumber   string      `json:"invoice_number"`
 	EventID         uuid.UUID   `json:"event_id"`
 	BuyerID         uuid.UUID   `json:"buyer_id"`
+	IdempotencyKey  *string     `json:"idempotency_key,omitempty"`
 	TotalTickets    int32       `json:"total_tickets"`
 	TotalAmountIDR  int64       `json:"total_amount_idr"`
 	Status          OrderStatus `json:"status"`

@@ -16,6 +16,7 @@ Dokumen ini mencatat keputusan arsitektur utama dan kompromi (*trade-off*) untuk
 | ADR-006 | Webhook Idempotency & Late Payment | `payment_webhooks` log di luar tx + `orders FOR UPDATE` + **Quota Safety First** | Pola "PAID Always Wins", atau in-memory idempotency cache |
 | ADR-007 | Penomoran Invoice & Tiket | PostgreSQL `SEQUENCE` (`invoice_seq`) + `crypto/rand` + `UNIQUE(order_item_id, seat_sequence)` | `SELECT MAX(...) FOR UPDATE` pada tabel `orders` |
 | ADR-008 | Identitas Demo & Uji Konkurensi | Hybrid JWT Bearer + Opt-in Demo Headers (`ALLOW_DEMO_HEADER_AUTH`) | Strict JWT saja untuk skenario benchmark lokal |
+| ADR-009 | Gateway Tunggal Nginx, Redis Fail-Open & Checkout Idempotency | Single-entry-point Nginx (`limit_req`, security headers, isolasi port + `db-debug`) + Redis `fail-open` (`user_id` rate limit & cache 3s) + DB `Idempotency-Key` | Redis queue/session penuh, IP-only rate limit, atau port DB/API terbuka ke host |
 
 ---
 
@@ -103,3 +104,15 @@ Dokumen ini mencatat keputusan arsitektur utama dan kompromi (*trade-off*) untuk
 - **Konteks:** Penilaian menyebutkan auth tidak menjadi fokus utama nilai, tetapi sistem harus membedakan role `ORGANIZER` vs `BUYER`, serta mendukung uji 200 pembeli bersamaan dan demo 5 menit secara lancar.
 - **Keputusan:** Menyediakan endpoint standar `POST /api/v1/auth/register` dan `POST /api/v1/auth/login` yang mengeluarkan JWT Bearer, plus dukungan opsional header `X-User-ID` dan `X-User-Role` yang hanya aktif bila environment variable `ALLOW_DEMO_HEADER_AUTH=true`.
 - **Alasan & Trade-Off:** Production build secara default dapat menonaktifkan header demo dengan `ALLOW_DEMO_HEADER_AUTH=false`, sementara saat `docker compose up` lokal untuk demo dan pengujian 200 concurrent buyers, pengujian dapat berjalan cepat dengan 200 identitas UUID yang sah (atau JWT penuh di test suite) tanpa bottleneck pembuatan 200 token bcrypt terlebih dahulu.
+
+---
+
+## ADR-009: Single-Entry-Point Nginx Edge, Redis `fail-open` Rate Limit & Cache, dan Checkout `Idempotency-Key`
+
+- **Konteks:** Pada flash sale, pembeli sering mengirim klik ganda/retry jaringan saat checkout, bot dapat membanjiri API atau mendaftar banyak akun dari satu IP (*Sybil attack*), dan ribuan pembaca katalog event memicu query PostgreSQL berulang kali. Di sisi infra, hanya gateway Nginx yang sebaiknya terekspos ke publik.
+- **Keputusan:**
+  1. **Single-Entry-Point Edge (`frontend/nginx.conf` + `docker-compose.yml`):** Hanya container `frontend` (Nginx) yang membuka port host (`5173`), sedangkan `api` (1 replika), `postgres`, dan `redis` terisolasi di jaringan bridge `app-network` (file `docker-compose.db-debug.yml` disediakan untuk debugging lokal/DataGrip). Nginx menimpa `X-Forwarded-For` dan `X-Real-IP` dengan `$remote_addr` agar header proxy tidak bisa dipalsukan oleh klien.
+  2. **Defense-in-Depth Rate Limit (`fail-open` Redis + Nginx):** Nginx menahan flood kasar (`50r/s`, `burst=250 nodelay`, HTTP `429`), sementara middleware Go + Redis (`go-redis/v9` Lua script, timeout `500ms`) menerapkan aturan presisi: batas ketat per IP pada `POST /api/v1/auth/register` (`5/15m`), per `IP+hash(email)` pada `login` (`10/1m`), dan per `actor.ID` (`user_id`) pada `POST /api/v1/orders` (`20/1m`) agar pengguna di WiFi/NAT yang sama tidak saling memblokir. Bila `REDIS_URL` kosong atau Redis mati, limiter otomatis **fail-open**.
+  3. **Short-TTL Event Catalog Cache (`EVENT_CACHE_TTL=3s`):** `GET /api/v1/events` dan `GET /api/v1/events/{id}` memakai read-through Redis cache yang otomatis di-invalidate pada mutasi event, order baru, cancel, webhook gagal/kadaluarsa, dan `ExpirySweeper`. Jalur checkout dan console organizer tetap membaca PostgreSQL secara langsung.
+  4. **PostgreSQL Checkout `Idempotency-Key`:** Partial unique index `(buyer_id, idempotency_key)` di tabel `orders` (`003_order_idempotency.sql`) memastikan retry/klik ganda dengan kunci yang sama mengembalikan order pertama (`201 Created` + header `Idempotent-Replay: true`) tanpa mengurangi kuota kedua kali.
+- **Trade-Off:** Menambah satu service `redis:7-alpine` di Compose dan ketergantungan `go-redis/v9`, tetapi seluruh jaminan kebenaran kuota dan idempotensi transaksi tetap bertahan penuh di PostgreSQL meski Redis dimatikan.

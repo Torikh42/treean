@@ -4,10 +4,12 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/signal"
 	"sync"
@@ -17,6 +19,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/torikh42/treean/internal/config"
 	"github.com/torikh42/treean/internal/handler"
+	"github.com/torikh42/treean/internal/middleware"
+	"github.com/torikh42/treean/internal/redisstore"
 	"github.com/torikh42/treean/internal/repository"
 	"github.com/torikh42/treean/internal/routes"
 	"github.com/torikh42/treean/internal/service"
@@ -31,11 +35,32 @@ const (
 )
 
 func main() {
+	dumpPath := flag.String("dump-openapi", "", "write OpenAPI 3.1 JSON schema to path and exit")
+	flag.Parse()
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if *dumpPath != "" {
+		if err := dumpOpenAPISpec(logger, *dumpPath); err != nil {
+			logger.Error("dumping OpenAPI spec failed", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(logger); err != nil {
 		logger.Error("application exited with error", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+}
+
+func dumpOpenAPISpec(logger *slog.Logger, outPath string) error {
+	h := buildHandler(logger, config.Config{JWTSecret: "openapi-export", WebhookSecret: "openapi-export"}, nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		return fmt.Errorf("unexpected status %d from /openapi.json", rec.Code)
+	}
+	return os.WriteFile(outPath, rec.Body.Bytes(), 0o600)
 }
 
 // run initializes dependencies, runs migrations, starts background workers, and serves HTTP traffic.
@@ -61,7 +86,17 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("database migrations and demo seed applied")
 
-	h := buildHandler(logger, cfg, pool)
+	redisClient, err := redisstore.NewClient(cfg.RedisURL, cfg.RedisTimeout, logger)
+	if err != nil {
+		return fmt.Errorf("initializing redis client: %w", err)
+	}
+	defer func() {
+		if closeErr := redisClient.Close(); closeErr != nil {
+			logger.Warn("closing redis client failed", slog.String("error", closeErr.Error()))
+		}
+	}()
+
+	h := buildHandlerWithRedis(logger, cfg, pool, redisClient)
 	srv := buildServer(cfg, h)
 
 	ln, err := (&net.ListenConfig{}).Listen(rootCtx, "tcp", srv.Addr)
@@ -71,6 +106,9 @@ func run(logger *slog.Logger) error {
 
 	orderRepo := repository.NewOrderRepo(pool)
 	sweeper := worker.NewExpirySweeper(orderRepo, logger, cfg.ExpirySweepInterval, defaultExpirySweepBatchSize)
+	if redisClient != nil {
+		sweeper.WithCache(redisClient)
+	}
 
 	workerCtx, cancelWorkers := context.WithCancel(rootCtx)
 	var wg sync.WaitGroup
@@ -95,6 +133,10 @@ func run(logger *slog.Logger) error {
 
 // buildHandler wires repositories, services, and the Huma/Chi router without touching a live pool at construction time.
 func buildHandler(logger *slog.Logger, cfg config.Config, pool *pgxpool.Pool) http.Handler {
+	return buildHandlerWithRedis(logger, cfg, pool, nil)
+}
+
+func buildHandlerWithRedis(logger *slog.Logger, cfg config.Config, pool *pgxpool.Pool, redisClient *redisstore.Client) http.Handler {
 	userRepo := repository.NewUserRepo(pool)
 	eventRepo := repository.NewEventRepo(pool)
 	orderRepo := repository.NewOrderRepo(pool)
@@ -104,6 +146,14 @@ func buildHandler(logger *slog.Logger, cfg config.Config, pool *pgxpool.Pool) ht
 	eventSvc := service.NewEventService(eventRepo, orderRepo)
 	orderSvc := service.NewOrderService(orderRepo, eventRepo)
 	paymentSvc := service.NewPaymentService(orderRepo, webhookRepo, eventRepo, cfg.WebhookSecret)
+	if redisClient != nil {
+		if cfg.RateLimitEnabled {
+			authSvc.WithLoginRateLimiter(redisClient, cfg.RateLimitLoginMax)
+		}
+		eventSvc.WithCache(redisClient, cfg.EventCacheTTL)
+		orderSvc.WithCache(redisClient)
+		paymentSvc.WithCache(redisClient)
+	}
 	demoSvc := service.NewDemoService(userRepo, eventRepo, orderSvc)
 
 	var db handler.DBPinger
@@ -111,16 +161,30 @@ func buildHandler(logger *slog.Logger, cfg config.Config, pool *pgxpool.Pool) ht
 		db = pool
 	}
 
+	var limiter middleware.RateLimiter
+	if redisClient != nil && cfg.RateLimitEnabled {
+		limiter = redisClient
+	}
+
 	log := safeLogger(logger)
 	return routes.NewRouter(routes.RouterDeps{
-		Logger:              log,
-		Authenticator:       authSvc,
-		System:              handler.NewSystemHandler(db, log),
-		Auth:                handler.NewAuthHandler(authSvc, log),
-		Events:              handler.NewEventHandler(eventSvc, log),
-		Orders:              handler.NewOrderHandler(orderSvc, log),
-		Webhooks:            handler.NewWebhookHandler(paymentSvc, log),
-		Demo:                handler.NewDemoHandler(demoSvc, log),
+		Logger:        log,
+		Authenticator: authSvc,
+		System:        handler.NewSystemHandler(db, log),
+		Auth:          handler.NewAuthHandler(authSvc, log),
+		Events:        handler.NewEventHandler(eventSvc, log),
+		Orders:        handler.NewOrderHandler(orderSvc, log),
+		Webhooks:      handler.NewWebhookHandler(paymentSvc, log),
+		Demo:          handler.NewDemoHandler(demoSvc, log),
+		RateLimiter:   limiter,
+		RateLimitPolicy: middleware.RateLimitPolicy{
+			Enabled:          cfg.RateLimitEnabled && redisClient != nil,
+			RegisterMax:      cfg.RateLimitRegisterMax,
+			LoginIPMax:       cfg.RateLimitLoginIPMax,
+			OrderUserMax:     cfg.RateLimitOrderUserMax,
+			OrderIPMax:       cfg.RateLimitOrderIPMax,
+			DemoFlashSaleMax: cfg.RateLimitDemoFlashSaleMax,
+		},
 		AllowDemoHeaderAuth: cfg.AllowDemoHeaderAuth,
 		CORSAllowedOrigins:  cfg.CORSAllowedOrigins,
 	})
