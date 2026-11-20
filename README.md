@@ -24,9 +24,10 @@ This monorepo pairs the Go backend REST API (`go1.26.2`) with a React + Vite + T
 ├── internal/
 │   ├── config/              # Env config loader, validation, and slog secret redaction
 │   ├── domain/              # Pure entities, state machine (CanPay/CanCancel), SHA-512 & error codes
-│   ├── handler/             # Huma v2 + Chi routes, error mapping, /health, /docs, /openapi.json, /demo
+│   ├── handler/             # HTTP/Huma controllers, request DTOs, and service error mapping
 │   ├── middleware/          # slog request logging, panic Recoverer, 1 MiB body limit, JWT + demo header auth
 │   ├── repository/          # pgxpool PostgreSQL repos, locking SQL, advisory-locked SQL migrator
+│   ├── routes/              # Chi router, OpenAPI v2 + Scalar setup, and domain route registration
 │   ├── service/             # Business use cases and consumer-defined repository interfaces
 │   └── worker/              # Background ExpirySweeper ticker (FOR UPDATE SKIP LOCKED)
 ├── frontend/                # React 19 + Vite + TanStack Router/Query/Form + @hey-api/openapi-ts (Nginx container)
