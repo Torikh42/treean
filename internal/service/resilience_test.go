@@ -119,12 +119,13 @@ func (m *idempotentOrderMock) FailPaymentWithEvent(context.Context, uuid.UUID, s
 func TestAuthService_LoginAccountRateLimitAndFailOpen(t *testing.T) {
 	t.Parallel()
 
-	var capturedCtx context.Context
+	ctxCh := make(chan context.Context, 1)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/auth/login", nil)
 	req.RemoteAddr = "203.0.113.10:12345"
 	middleware.WithClientIP(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		capturedCtx = r.Context()
+		ctxCh <- r.Context()
 	})).ServeHTTP(httptest.NewRecorder(), req)
+	capturedCtx := <-ctxCh
 
 	limiter := &stubRateLimiter{allow: false, wait: 15 * time.Second}
 	blockedSvc := service.NewAuthService(newMockUserRepo(), "jwt-secret").

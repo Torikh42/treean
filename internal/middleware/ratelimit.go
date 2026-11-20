@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	windowOneMinute   = time.Minute
-	windowRegister    = 15 * time.Minute
-	unknownIPFallback = "unknown"
-	headerRetryAfter  = "Retry-After"
+	defaultRateLimitInterval  = time.Minute
+	registerRateLimitInterval = 15 * time.Minute
+	unknownIPFallback         = "unknown"
+	headerRetryAfter          = "Retry-After"
 )
 
 // RateLimiter checks whether a caller key may proceed within a fixed window.
@@ -73,18 +73,18 @@ func checkOperationLimits(
 ) (bool, time.Duration) {
 	switch operationID {
 	case "register-user":
-		return checkBucket(ctx, limiter, "rl:register:ip:"+clientIP, policy.RegisterMax, windowRegister)
+		return checkBucket(ctx, limiter, "rl:register:ip:"+clientIP, policy.RegisterMax, registerRateLimitInterval)
 	case "login-user":
-		return checkBucket(ctx, limiter, "rl:login:ip:"+clientIP, policy.LoginIPMax, windowOneMinute)
+		return checkBucket(ctx, limiter, "rl:login:ip:"+clientIP, policy.LoginIPMax, defaultRateLimitInterval)
 	case "create-order", "cancel-order":
 		if actor, ok := ActorFromContext(ctx); ok && actor.ID != uuid.Nil {
-			if okUser, waitUser := checkBucket(ctx, limiter, "rl:orders:user:"+actor.ID.String(), policy.OrderUserMax, windowOneMinute); !okUser {
+			if okUser, waitUser := checkBucket(ctx, limiter, "rl:orders:user:"+actor.ID.String(), policy.OrderUserMax, defaultRateLimitInterval); !okUser {
 				return false, waitUser
 			}
 		}
-		return checkBucket(ctx, limiter, "rl:orders:ip:"+clientIP, policy.OrderIPMax, windowOneMinute)
+		return checkBucket(ctx, limiter, "rl:orders:ip:"+clientIP, policy.OrderIPMax, defaultRateLimitInterval)
 	case "demo-flash-sale":
-		return checkBucket(ctx, limiter, "rl:demo:ip:"+clientIP, policy.DemoFlashSaleMax, windowOneMinute)
+		return checkBucket(ctx, limiter, "rl:demo:ip:"+clientIP, policy.DemoFlashSaleMax, defaultRateLimitInterval)
 	default:
 		return true, 0
 	}

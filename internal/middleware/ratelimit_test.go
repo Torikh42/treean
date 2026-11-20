@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -111,7 +110,7 @@ func TestHumaRateLimitMiddleware_UserIDAndRegisterIP(t *testing.T) {
 			api.UseMiddleware(middleware.NewHumaAuthMiddleware(
 				api,
 				&stubAuthenticator{actor: domain.Actor{ID: actorID, Role: domain.RoleBuyer}},
-				slog.New(slog.NewTextHandler(io.Discard, nil)),
+				slog.New(slog.DiscardHandler),
 				false,
 			))
 		}

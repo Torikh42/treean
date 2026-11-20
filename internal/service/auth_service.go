@@ -207,7 +207,11 @@ func (s *AuthService) enforceLoginRateLimit(ctx context.Context, normalizedEmail
 	sum := sha256.Sum256([]byte(normalizedEmail))
 	key := "rl:login:acct:" + ip + ":" + hex.EncodeToString(sum[:8])
 	allowed, _, err := s.limiter.Allow(ctx, key, s.loginAcctMax, time.Minute)
-	if err != nil || allowed {
+	if err != nil {
+		// Fail open when limiter store errors so login continues uninterrupted.
+		allowed = true
+	}
+	if allowed {
 		return nil
 	}
 	return domain.NewRateLimitedError("too many login attempts; please wait and try again")

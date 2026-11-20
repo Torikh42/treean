@@ -114,22 +114,33 @@ func (r *OrderRepo) CreateOrderIdempotent(
 
 	res, err := createOrderInTx(ctx, tx, eventID, buyerID, cleanItems, requestedQty, cleanKey, nowUTC)
 	if err != nil {
-		if cleanKey != "" && isIdempotencyKeyConflict(err) {
-			rollbackTx(tx)
-			existing, lookupErr := r.findOrderByIdempotencyKey(ctx, buyerID, cleanKey)
-			if lookupErr != nil {
-				return nil, lookupErr
-			}
-			if existing != nil {
-				return &CreateOrderResult{Order: existing, IdempotentReplay: true}, nil
-			}
-		}
-		return nil, err
+		return r.resolveOrderCreateConflict(ctx, tx, buyerID, cleanKey, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing create order tx: %w", err)
 	}
 	return res, nil
+}
+
+func (r *OrderRepo) resolveOrderCreateConflict(
+	ctx context.Context,
+	tx pgx.Tx,
+	buyerID uuid.UUID,
+	cleanKey string,
+	createErr error,
+) (*CreateOrderResult, error) {
+	if cleanKey == "" || !isIdempotencyKeyConflict(createErr) {
+		return nil, createErr
+	}
+	rollbackTx(tx)
+	existing, lookupErr := r.findOrderByIdempotencyKey(ctx, buyerID, cleanKey)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	if existing == nil {
+		return nil, createErr
+	}
+	return &CreateOrderResult{Order: existing, IdempotentReplay: true}, nil
 }
 
 func (r *OrderRepo) prepareCreateOrder(

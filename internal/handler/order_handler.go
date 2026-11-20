@@ -29,7 +29,7 @@ type CreateOrderInput struct {
 
 // CreateOrderOutput wraps the reserved order response with optional replay indicator header.
 type CreateOrderOutput struct {
-	IdempotentReplay string `header:"Idempotent-Replay,omitempty" doc:"Set to true when returning a previously created order for a matching Idempotency-Key"`
+	IdempotentReplay string `header:"Idempotent-Replay" doc:"Set to true when returning a previously created order for a matching Idempotency-Key"`
 	Body             *domain.Order
 }
 

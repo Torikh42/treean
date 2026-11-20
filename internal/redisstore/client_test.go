@@ -77,21 +77,26 @@ func TestClient_StrictFailOpenOnNilOrUnreachableRedis(t *testing.T) {
 	unreachable.InvalidateEvents(ctx, id, id, uuid.Nil)
 }
 
-func TestClient_LiveRedisRateLimitAndCache(t *testing.T) {
+func openLiveTestRedisClient(t *testing.T) *Client {
+	t.Helper()
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
 		t.Skip("REDIS_URL not configured")
 	}
-
-	ctx := t.Context()
 	c, err := NewClient(redisURL, 500*time.Millisecond, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	if err := c.rdb.FlushDB(ctx).Err(); err != nil {
+	if err := c.rdb.FlushDB(t.Context()).Err(); err != nil {
 		t.Fatalf("FlushDB: %v", err)
 	}
+	return c
+}
+
+func TestClient_LiveRedisRateLimit(t *testing.T) {
+	ctx := t.Context()
+	c := openLiveTestRedisClient(t)
 
 	rlKey := "rl:live:" + uuid.NewString()
 	for i := range 2 {
@@ -104,6 +109,11 @@ func TestClient_LiveRedisRateLimitAndCache(t *testing.T) {
 	if err != nil || allowed3 || retryAfter3 < time.Second {
 		t.Fatalf("hit 3 = (%v, %v, %v), want blocked with retryAfter >= 1s", allowed3, retryAfter3, err)
 	}
+}
+
+func TestClient_LiveRedisEventCache(t *testing.T) {
+	ctx := t.Context()
+	c := openLiveTestRedisClient(t)
 
 	evID := uuid.New()
 	ev := domain.Event{ID: evID, Title: "Live Cached Event", Venue: "Hall", EventDate: time.Now().UTC()}
