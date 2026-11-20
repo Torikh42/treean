@@ -8,7 +8,7 @@ import {
   paymentWebhookMutation,
 } from "@/lib/api/generated/@tanstack/react-query.gen";
 import type { WebhookResult } from "@/lib/api/generated/types.gen";
-import { parseApiError, type ParsedApiError } from "@/lib/api/errors";
+import { toastApiError, type ParsedApiError } from "@/lib/api/errors";
 import { computeSha512Hex } from "@/lib/format";
 
 interface WebhookLabInitial {
@@ -41,10 +41,8 @@ export function useWebhookLab(initial?: WebhookLabInitial) {
       toast.success(`Webhook outcome: ${res.outcome}`);
     },
     onError: (err) => {
-      const parsed = parseApiError(err);
       setLastResult(null);
-      setLastError(parsed);
-      toast.error(`${parsed.code}: ${parsed.detail}`);
+      setLastError(toastApiError(err));
     },
   });
 

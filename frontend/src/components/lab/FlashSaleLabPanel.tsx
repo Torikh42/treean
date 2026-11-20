@@ -72,7 +72,7 @@ export function FlashSaleLabPanel({
 
       {submitError && (
         <div className="mt-4">
-          <StateNotice kind="error" title="Benchmark failed" error={submitError} />
+          <StateNotice kind="error" title="Benchmark failed" error={submitError} showTechnicalDetails />
         </div>
       )}
 
