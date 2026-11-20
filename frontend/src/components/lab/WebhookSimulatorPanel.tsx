@@ -102,7 +102,7 @@ export function WebhookSimulatorPanel({ lab }: { lab: ReturnType<typeof useWebho
 
       {lab.lastError && (
         <div className="mt-4">
-          <StateNotice kind="error" title="Webhook rejected" error={lab.lastError} />
+          <StateNotice kind="error" title="Webhook rejected" error={lab.lastError} showTechnicalDetails />
         </div>
       )}
 

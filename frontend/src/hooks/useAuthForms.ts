@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { z } from "zod";
-import { parseApiError, type ParsedApiError } from "@/lib/api/errors";
+import { toastApiError, type ParsedApiError } from "@/lib/api/errors";
 import {
   getMeQueryKey,
   loginUserMutation,
@@ -58,9 +58,7 @@ export function useLoginForm(redirectPath?: string) {
       void navigate({ href: target });
     },
     onError: (err) => {
-      const parsed = parseApiError(err);
-      setSubmitError(parsed);
-      toast.error(`${parsed.code}: ${parsed.detail}`);
+      setSubmitError(toastApiError(err));
     },
   });
 
@@ -113,9 +111,7 @@ export function useRegisterForm(redirectPath?: string) {
       void navigate({ href: target });
     },
     onError: (err) => {
-      const parsed = parseApiError(err);
-      setSubmitError(parsed);
-      toast.error(`${parsed.code}: ${parsed.detail}`);
+      setSubmitError(toastApiError(err));
     },
   });
 

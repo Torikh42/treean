@@ -6,7 +6,7 @@ import {
   listEventsQueryKey,
 } from "@/lib/api/generated/@tanstack/react-query.gen";
 import type { FlashSaleReport } from "@/lib/api/generated/types.gen";
-import { parseApiError, type ParsedApiError } from "@/lib/api/errors";
+import { toastApiError, type ParsedApiError } from "@/lib/api/errors";
 
 export function useFlashSaleLab() {
   const queryClient = useQueryClient();
@@ -26,9 +26,7 @@ export function useFlashSaleLab() {
       );
     },
     onError: (err) => {
-      const parsed = parseApiError(err);
-      setSubmitError(parsed);
-      toast.error(`${parsed.code}: ${parsed.detail}`);
+      setSubmitError(toastApiError(err));
     },
   });
 

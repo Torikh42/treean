@@ -18,7 +18,9 @@ function OrderDetailPage() {
     <OrderDetailCard
       order={detail.order}
       isLoading={detail.isLoading}
+      isFetching={detail.isFetching}
       error={detail.error}
+      actionError={detail.actionError}
       onRetry={() => void detail.refetch()}
       countdown={detail.countdown}
       onPay={detail.payOrder}

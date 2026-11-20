@@ -95,6 +95,8 @@ function validateEventInput(input: EventFormInput): BuildEventBodyResult<z.infer
         status: 422,
         code: "VALIDATION_ERROR",
         detail: "Invalid event date/time format",
+        userTitle: "Invalid event date",
+        userMessage: "The selected event date and time could not be read.",
         actionHint: "Pick a valid date and time.",
       },
     };
@@ -114,12 +116,15 @@ function validateEventInput(input: EventFormInput): BuildEventBodyResult<z.infer
   });
 
   if (!parsed.success) {
+    const issueMessage = parsed.error.issues[0]?.message ?? "Check event inputs";
     return {
       ok: false,
       error: {
         status: 422,
         code: "VALIDATION_ERROR",
-        detail: parsed.error.issues[0]?.message ?? "Check event inputs",
+        detail: issueMessage,
+        userTitle: "Please check event details",
+        userMessage: issueMessage,
         actionHint: "Ensure title, venue, valid date, and 2 to 10 valid tiers.",
       },
     };
@@ -129,13 +134,16 @@ function validateEventInput(input: EventFormInput): BuildEventBodyResult<z.infer
   for (const tier of parsed.data.ticket_types) {
     const normalized = tier.name.toLowerCase();
     if (seenNames.has(normalized)) {
+      const msg = `Duplicate ticket tier name "${tier.name}"`;
       return {
         ok: false,
         error: {
           status: 422,
           code: "VALIDATION_ERROR",
-          detail: `Duplicate ticket tier name "${tier.name}"`,
-          actionHint: "Each ticket tier must have a unique name.",
+          detail: msg,
+          userTitle: "Duplicate tier name",
+          userMessage: `Each ticket tier needs a unique name ("${tier.name}" appears more than once).`,
+          actionHint: "Rename the duplicate ticket tier before saving.",
         },
       };
     }
@@ -178,13 +186,16 @@ export function buildUpdateEventBody(
     const cleanTier = validated.body.ticket_types[i];
     const soldOrHeld = draft?.sold_or_held ?? 0;
     if (cleanTier && soldOrHeld > 0 && cleanTier.total_quota < soldOrHeld) {
+      const msg = `Tier "${cleanTier.name}" quota (${cleanTier.total_quota}) cannot be lower than ${soldOrHeld} sold/reserved ticket(s).`;
       return {
         ok: false,
         error: {
           status: 409,
           code: "QUOTA_CONFLICT",
-          detail: `Tier "${cleanTier.name}" quota (${cleanTier.total_quota}) cannot be lower than ${soldOrHeld} sold/reserved ticket(s).`,
-          actionHint: `Set total quota to at least ${soldOrHeld}.`,
+          detail: msg,
+          userTitle: "Quota cannot be lowered below sold tickets",
+          userMessage: msg,
+          actionHint: `Set total quota for "${cleanTier.name}" to at least ${soldOrHeld}.`,
         },
       };
     }
