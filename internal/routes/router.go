@@ -23,7 +23,7 @@ const (
 var bearerSecurity = []map[string][]string{{bearerScheme: {}}}
 
 // RouterDeps bundles handlers and middleware dependencies wired by cmd/api/main.go.
-type RouterDeps struct { //nolint:revive // Preserves established RouterDeps type name for external callers.
+type RouterDeps struct {
 	Logger              *slog.Logger
 	Authenticator       middleware.Authenticator
 	System              *handler.SystemHandler
