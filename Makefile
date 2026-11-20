@@ -1,4 +1,4 @@
-.PHONY: up down logs test test-integration lint fmt build
+.PHONY: up down logs test test-integration lint fmt build hooks
 
 up:
 	docker compose up --build
@@ -23,3 +23,6 @@ fmt:
 
 build:
 	go build -o bin/api ./cmd/api
+
+hooks:
+	git config core.hooksPath .githooks

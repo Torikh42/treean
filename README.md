@@ -247,9 +247,10 @@ make test-integration
 - `TestIntegration_WebhookIdempotency_10ParallelReplays`: 10 concurrent identical signed webhooks returning `200 OK` (`1` `PROCESSED_PAID`, `9` `IGNORED_DUPLICATE`) with exact `4` issued tickets.
 - `TestIntegration_FlashSale_200ConcurrentBuyers_ZeroOversell`: 200 concurrent distinct buyers racing for 100 `Reguler` tickets (`100` `201 Created`, `100` `409 Conflict`, DB `SUM(total_tickets) == 100`, `remaining_quota == 0`).
 
-Formatting, linting, and binary build:
+Formatting, linting, and pre-commit hook setup:
 
 ```bash
+make hooks # Activates .githooks/pre-commit (env guard, gofmt, go vet, frontend lint & typecheck)
 make fmt
 make lint
 make build
