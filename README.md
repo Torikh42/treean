@@ -73,7 +73,7 @@ Full trade-offs are documented in [`DECISIONS.md`](DECISIONS.md) (`ADR-001` thro
 
 4. **Safe Double-Click & Retry Checkout (`ADR-009`)**
    - **Problem:** A buyer on unstable mobile internet double-clicks checkout or retries a timed-out request and accidentally creates two orders.
-   - **Solution:** `POST /api/v1/orders` accepts an `Idempotency-Key` header (stored in a `useRef` per checkout attempt on the frontend). PostgreSQL enforces a partial unique index on `(buyer_id, idempotency_key)`. Retrying with the same key and items returns the original order (`201 Created` + header `Idempotent-Replay: true`) without deducting quota twice. Using the same key with different items returns `409 IDEMPOTENCY_CONFLICT`.
+   - **Solution:** `POST /api/v1/orders` accepts an optional `Idempotency-Key` header (max 128 chars; stored in a `useRef` per checkout attempt on the frontend and reset whenever quantities change). PostgreSQL enforces a partial unique index on `(buyer_id, idempotency_key)`. Retrying with the same key returns the existing order (`201 Created` + header `Idempotent-Replay: true`) without deducting quota twice.
 
 5. **Payment Webhooks: Quota Safety First (`ADR-006`)**
    - **Problem:** Payment gateways retry webhooks multiple times, or a late payment webhook arrives after the 15-minute hold already expired and the ticket was sold to someone else.
@@ -286,7 +286,7 @@ All routes are available through the Nginx entry point at `http://localhost:5173
 | `GET` | `/api/v1/events/{id}` | Public | Get single event detail and tier quotas (`200`, `3s` Redis read-through cache) |
 | `PUT` | `/api/v1/events/{id}` | Owner `ORGANIZER` | Update event and upsert/validate ticket tiers atomically (`200`, `403`, `409`) |
 | `DELETE` | `/api/v1/events/{id}` | Owner `ORGANIZER` | Delete an event that has zero orders (`204`, `403`, `409 EVENT_HAS_ORDERS`) |
-| `POST` | `/api/v1/orders` | Authenticated | Reserve `1..4` tickets for 15 minutes (`201`). Accepts optional `Idempotency-Key` header (max 128 chars); replays return `201` + `Idempotent-Replay: true`, payload mismatches return `409 IDEMPOTENCY_CONFLICT` |
+| `POST` | `/api/v1/orders` | Authenticated | Reserve `1..4` tickets for 15 minutes (`201`). Accepts optional `Idempotency-Key` header (max 128 chars); retries with the same key return `201` + `Idempotent-Replay: true` without deducting quota twice |
 | `GET` | `/api/v1/orders` | Authenticated | List caller's orders with items and issued tickets (`200`) |
 | `GET` | `/api/v1/orders/{id}` | Buyer / Event Organizer | Get order detail with items, status logs, and issued tickets (`200`) |
 | `POST` | `/api/v1/orders/{id}/cancel` | Order Buyer | Cancel `WAITING_PAYMENT` order, restore quota, and invalidate cache (`200`) |
