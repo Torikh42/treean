@@ -66,6 +66,9 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				if status == 0 {
 					status = http.StatusOK
 				}
+				if r.URL.Path == "/health" && status == http.StatusOK {
+					return
+				}
 				log.InfoContext(r.Context(), "http request",
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),

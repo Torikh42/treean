@@ -252,6 +252,32 @@ func TestRequestLogger(t *testing.T) {
 	}
 }
 
+func TestRequestLogger_SkipsHealthyProbeOnly(t *testing.T) {
+	t.Parallel()
+
+	var okBuf bytes.Buffer
+	okLogger := slog.New(slog.NewJSONHandler(&okBuf, nil))
+	okHandler := middleware.RequestLogger(okLogger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	okRec := httptest.NewRecorder()
+	okHandler.ServeHTTP(okRec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil))
+	if okBuf.Len() != 0 {
+		t.Fatalf("expected /health 200 to be omitted from request logs, got %s", okBuf.String())
+	}
+
+	var errBuf bytes.Buffer
+	errLogger := slog.New(slog.NewJSONHandler(&errBuf, nil))
+	errHandler := middleware.RequestLogger(errLogger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	errRec := httptest.NewRecorder()
+	errHandler.ServeHTTP(errRec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil))
+	if got := decodeSingleLog(t, errBuf.Bytes()).Status; got != http.StatusServiceUnavailable {
+		t.Fatalf("unhealthy /health logged status = %d, want 503", got)
+	}
+}
+
 func TestMaxBodyBytes(t *testing.T) {
 	t.Parallel()
 

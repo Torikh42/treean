@@ -54,9 +54,12 @@ export function useEventCheckout(eventId: string) {
       idempotencyKeyRef.current = null;
       setSubmitError(null);
       setQuantities({});
-      void queryClient.invalidateQueries({ queryKey: listEventsQueryKey() });
-      void queryClient.invalidateQueries({ queryKey: getEventQueryKey({ path: { id: eventId } }) });
-      void queryClient.invalidateQueries({ queryKey: listMyOrdersQueryKey() });
+      void queryClient.invalidateQueries({ queryKey: listEventsQueryKey(), refetchType: "none" });
+      void queryClient.invalidateQueries({
+        queryKey: getEventQueryKey({ path: { id: eventId } }),
+        refetchType: "none",
+      });
+      void queryClient.invalidateQueries({ queryKey: listMyOrdersQueryKey(), refetchType: "none" });
       toast.success(`Reserved ${order.total_tickets} ticket(s) - 15-minute hold active`);
       void navigate({ to: "/orders/$orderId", params: { orderId: order.id } });
     },
