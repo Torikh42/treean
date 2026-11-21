@@ -206,7 +206,7 @@ func (s *AuthService) enforceLoginRateLimit(ctx context.Context, normalizedEmail
 	}
 	sum := sha256.Sum256([]byte(normalizedEmail))
 	key := "rl:login:acct:" + ip + ":" + hex.EncodeToString(sum[:8])
-	allowed, _, err := s.limiter.Allow(ctx, key, s.loginAcctMax, time.Minute)
+	allowed, retryAfter, err := s.limiter.Allow(ctx, key, s.loginAcctMax, time.Minute)
 	if err != nil {
 		// Fail open when limiter store errors so login continues uninterrupted.
 		allowed = true
@@ -214,7 +214,7 @@ func (s *AuthService) enforceLoginRateLimit(ctx context.Context, normalizedEmail
 	if allowed {
 		return nil
 	}
-	return domain.NewRateLimitedError("too many login attempts; please wait and try again")
+	return domain.NewRateLimitedError("too many login attempts; please wait and try again").WithRetryAfter(retryAfter)
 }
 
 func (s *AuthService) signJWT(u *domain.User) (string, error) {

@@ -58,7 +58,7 @@ export function RegisterView({ register, redirectPath }: RegisterViewProps) {
                     value={field.state.value}
                     onBlur={field.handleBlur}
                     onChange={(e) => field.handleChange(e.target.value)}
-                    placeholder="Alex Pratama"
+                    placeholder="Enter your full name"
                     className="mt-1 min-h-[44px] w-full border-2 border-ink bg-canvas px-3 text-sm font-normal normal-case"
                   />
                   {fieldErr && (
@@ -125,22 +125,26 @@ export function RegisterView({ register, redirectPath }: RegisterViewProps) {
             {(field) => (
               <fieldset className="space-y-2">
                 <legend className="text-xs font-bold uppercase">Account Role</legend>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Account Role">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {ROLE_OPTIONS.map((opt) => {
                     const selected = field.state.value === opt.role;
                     return (
-                      <button
+                      <label
                         key={opt.role}
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        onClick={() => field.handleChange(opt.role)}
-                        className={`min-h-[44px] cursor-pointer border-2 border-ink p-3 text-left transition-colors ${
+                        className={`min-h-[44px] cursor-pointer border-2 border-ink p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-ink ${
                           selected
                             ? "bg-signal brutal-shadow-sm"
                             : "bg-canvas hover:bg-surface-muted"
                         }`}
                       >
+                        <input
+                          type="radio"
+                          name="role"
+                          value={opt.role}
+                          checked={selected}
+                          onChange={() => field.handleChange(opt.role)}
+                          className="sr-only"
+                        />
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-mono text-sm font-bold">{opt.label}</span>
                           <span className="border border-ink bg-surface px-1.5 py-0.5 font-mono text-[11px] font-bold">
@@ -148,7 +152,7 @@ export function RegisterView({ register, redirectPath }: RegisterViewProps) {
                           </span>
                         </div>
                         <p className="mt-1.5 text-xs text-ink-muted">{opt.summary}</p>
-                      </button>
+                      </label>
                     );
                   })}
                 </div>

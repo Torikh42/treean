@@ -168,11 +168,14 @@ func (r *OrderRepo) prepareCreateOrder(
 
 	nowUTC := now.UTC()
 	// Run overdue sweeps outside the checkout tx so ticket_types rows are locked once in canonical ASC order.
-	if _, err := r.ExpireDueOrders(ctx, &eventID, defaultExpiryBatchLimit, actorTypeLazyCheck, nowUTC); err != nil {
+	swept, err := r.ExpireDueOrders(ctx, &eventID, defaultExpiryBatchLimit, actorTypeLazyCheck, nowUTC)
+	if err != nil {
 		return nil, 0, time.Time{}, err
 	}
-	if err := r.expireBuyerDueOrdersForEvent(ctx, eventID, buyerID, nowUTC); err != nil {
-		return nil, 0, time.Time{}, err
+	if swept == defaultExpiryBatchLimit {
+		if err := r.expireBuyerDueOrdersForEvent(ctx, eventID, buyerID, nowUTC); err != nil {
+			return nil, 0, time.Time{}, err
+		}
 	}
 	return cleanItems, requestedQty, nowUTC, nil
 }
@@ -201,7 +204,7 @@ func createOrderInTx(
 			return &CreateOrderResult{Order: existing, IdempotentReplay: true}, nil
 		}
 	}
-	if err := checkBuyerAllowance(ctx, tx, eventID, buyerID, requestedQty); err != nil {
+	if err := checkBuyerAllowance(ctx, tx, eventID, buyerID, requestedQty, nowUTC); err != nil {
 		return nil, err
 	}
 
@@ -633,13 +636,14 @@ func acquireBuyerEventLock(ctx context.Context, tx pgx.Tx, eventID, buyerID uuid
 	return nil
 }
 
-func checkBuyerAllowance(ctx context.Context, tx pgx.Tx, eventID, buyerID uuid.UUID, requestedQty int32) error {
+func checkBuyerAllowance(ctx context.Context, tx pgx.Tx, eventID, buyerID uuid.UUID, requestedQty int32, nowUTC time.Time) error {
 	const sumBuyerSQL = `
 		SELECT COALESCE(SUM(total_tickets), 0)::int
 		FROM orders
-		WHERE event_id = $1 AND buyer_id = $2 AND status IN ('WAITING_PAYMENT', 'PAID')`
+		WHERE event_id = $1 AND buyer_id = $2
+		  AND (status = 'PAID' OR (status = 'WAITING_PAYMENT' AND expires_at >= $3))`
 	var existingQty int32
-	if err := tx.QueryRow(ctx, sumBuyerSQL, eventID, buyerID).Scan(&existingQty); err != nil {
+	if err := tx.QueryRow(ctx, sumBuyerSQL, eventID, buyerID, nowUTC).Scan(&existingQty); err != nil {
 		return fmt.Errorf("checking buyer ticket allowance: %w", err)
 	}
 	if int64(existingQty)+int64(requestedQty) > int64(domain.MaxTicketsPerBuyerPerEvent) {

@@ -31,9 +31,35 @@ export function useEventCheckout(eventId: string) {
   const activeRole = getActiveRole(auth);
   const isBuyer = authenticated && activeRole === "BUYER";
 
-  const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const [submitError, setSubmitError] = useState<ParsedApiError | null>(null);
-  const idempotencyKeyRef = useRef<string | null>(null);
+  const [scopedState, setScopedState] = useState<{
+    eventId: string;
+    quantities: Record<string, number>;
+    submitError: ParsedApiError | null;
+  }>({
+    eventId,
+    quantities: {},
+    submitError: null,
+  });
+  const idempotencyKeyRef = useRef<{ eventId: string; key: string } | null>(null);
+
+  const quantities = scopedState.eventId === eventId ? scopedState.quantities : {};
+  const submitError = scopedState.eventId === eventId ? scopedState.submitError : null;
+
+  function setSubmitError(error: ParsedApiError | null) {
+    setScopedState((prev) => ({
+      eventId,
+      quantities: prev.eventId === eventId ? prev.quantities : {},
+      submitError: error,
+    }));
+  }
+
+  function resetQuantitiesAndError() {
+    setScopedState({
+      eventId,
+      quantities: {},
+      submitError: null,
+    });
+  }
 
   const eventQuery = useQuery(getEventOptions({ path: { id: eventId } }));
   const myOrdersQuery = useQuery({
@@ -52,8 +78,7 @@ export function useEventCheckout(eventId: string) {
     ...createOrderMutation(),
     onSuccess: (order) => {
       idempotencyKeyRef.current = null;
-      setSubmitError(null);
-      setQuantities({});
+      resetQuantitiesAndError();
       void queryClient.invalidateQueries({ queryKey: listEventsQueryKey(), refetchType: "none" });
       void queryClient.invalidateQueries({
         queryKey: getEventQueryKey({ path: { id: eventId } }),
@@ -80,17 +105,23 @@ export function useEventCheckout(eventId: string) {
 
   function updateQuantity(tierId: string, delta: number, maxQuota: number) {
     idempotencyKeyRef.current = null;
-    setSubmitError(null);
-    setQuantities((prev) => {
-      const current = prev[tierId] ?? 0;
-      const otherSelected = totalSelected - current;
+    setScopedState((prev) => {
+      const baseQuantities = prev.eventId === eventId ? prev.quantities : {};
+      const current = baseQuantities[tierId] ?? 0;
+      const prevTotal = Object.values(baseQuantities).reduce((sum, q) => sum + q, 0);
+      const otherSelected = prevTotal - current;
       const maxAllowedForTier = Math.min(maxQuota, remainingAllowance - otherSelected);
       const next = Math.max(0, Math.min(maxAllowedForTier, current + delta));
-      return { ...prev, [tierId]: next };
+      return {
+        eventId,
+        quantities: { ...baseQuantities, [tierId]: next },
+        submitError: null,
+      };
     });
   }
 
   function submitCheckout() {
+    if (createMut.isPending) return;
     if (!authenticated) {
       setSubmitError({
         status: 401,
@@ -146,10 +177,12 @@ export function useEventCheckout(eventId: string) {
       return;
     }
 
-    idempotencyKeyRef.current ??= generateIdempotencyKey();
+    if (!idempotencyKeyRef.current || idempotencyKeyRef.current.eventId !== eventId) {
+      idempotencyKeyRef.current = { eventId, key: generateIdempotencyKey() };
+    }
     createMut.mutate({
       headers: {
-        "Idempotency-Key": idempotencyKeyRef.current,
+        "Idempotency-Key": idempotencyKeyRef.current.key,
       },
       body: {
         event_id: eventId,

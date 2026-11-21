@@ -10,15 +10,19 @@ type FlashSaleSearch = {
 };
 
 export const Route = createFileRoute("/flash-sale")({
-  validateSearch: (search: Record<string, unknown>): FlashSaleSearch => ({
-    orderId: typeof search.orderId === "string" ? search.orderId : undefined,
-    grossAmount:
-      typeof search.grossAmount === "number"
-        ? search.grossAmount
-        : typeof search.grossAmount === "string" && search.grossAmount !== "" && !Number.isNaN(Number(search.grossAmount))
-          ? Number(search.grossAmount)
-          : undefined,
-  }),
+  validateSearch: (search: Record<string, unknown>): FlashSaleSearch => {
+    const rawAmount = search.grossAmount;
+    const numAmount =
+      typeof rawAmount === "number"
+        ? rawAmount
+        : typeof rawAmount === "string" && rawAmount.trim() !== ""
+          ? Number(rawAmount)
+          : Number.NaN;
+    return {
+      orderId: typeof search.orderId === "string" ? search.orderId : undefined,
+      grossAmount: Number.isFinite(numAmount) && numAmount >= 0 ? numAmount : undefined,
+    };
+  },
   component: FlashSalePage,
 });
 

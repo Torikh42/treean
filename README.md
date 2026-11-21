@@ -366,20 +366,60 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:5173/api/v1/webhooks/payme
 
 ## 12. Testing, Formatting & Linting
 
+### 200-Concurrent Booking Proof (Zero Oversell)
+
+Both the in-process benchmark (`TestDemoService_RunFlashSaleDefaultSpike`, `POST /api/v1/demo/flash-sale`) and the live PostgreSQL integration test (`TestIntegration_FlashSale_200ConcurrentBuyers_ZeroOversell`) fire `200` simultaneous 1-ticket checkout requests behind a synchronized start barrier against a `100`-ticket `Reguler` pool:
+
+```bash
+go test -v -race -run TestDemoService_RunFlashSaleDefaultSpike ./internal/service/...
+```
+
+Verified result (`100` succeeded, `100` rejected with `409 QUOTA_EXHAUSTED`, `remaining_quota = 0`, `zero_oversell = true`):
+
+```json
+{
+  "concurrent_requests": 200,
+  "succeeded_bookings": 100,
+  "rejected_quota_empty": 100,
+  "rejected_other": 0,
+  "remaining_quota_after": 0,
+  "zero_oversell": true
+}
+```
+
+```text
+=== RUN   TestIntegration_FlashSale_200ConcurrentBuyers_ZeroOversell
+--- PASS: TestIntegration_FlashSale_200ConcurrentBuyers_ZeroOversell (0.31s)
+```
+
 ### Unit Tests (No External Database Required)
 
 ```bash
 make test
-# Or run all Go unit, migration, and entrypoint packages as in CI:
+# Runs all Go unit, migration, and entrypoint packages:
 go test -v -race ./internal/... ./migrations/... ./cmd/...
 ```
 
 ### Integration & Concurrency Tests (`tests/integration_test.go`, `-tags=integration`)
 
-Requires a running PostgreSQL instance matching `DATABASE_URL` (and optionally `REDIS_URL` to run the live Redis rate-limit and cache integration test):
+Start PostgreSQL and Redis with host port mappings via `docker-compose.db-debug.yml`, export `DATABASE_URL` and `REDIS_URL`, and run `make test-integration`:
 
 ```bash
+docker compose -f docker-compose.yml -f docker-compose.db-debug.yml up -d postgres redis
+
+export DATABASE_URL="postgres://ticketing:ticketing_secret@localhost:5432/event_ticketing?sslmode=disable"
+export REDIS_URL="redis://localhost:6379/0"
+
 make test-integration
+```
+
+On PowerShell:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.db-debug.yml up -d postgres redis
+$env:DATABASE_URL = "postgres://ticketing:ticketing_secret@localhost:5432/event_ticketing?sslmode=disable"
+$env:REDIS_URL = "redis://localhost:6379/0"
+go test -v -race -tags=integration ./tests/...
 ```
 
 `tests/integration_test.go` verifies all 11 end-to-end scenarios against live PostgreSQL (and Redis when `REDIS_URL` is set):

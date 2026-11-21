@@ -9,6 +9,7 @@ export function StateNotice({
   detail,
   error,
   showTechnicalDetails = false,
+  headingLevel = "h2",
   onRetry,
   action,
 }: {
@@ -17,6 +18,7 @@ export function StateNotice({
   detail?: string;
   error?: ParsedApiError | null;
   showTechnicalDetails?: boolean;
+  headingLevel?: "h1" | "h2" | "h3";
   onRetry?: () => void;
   action?: ReactNode;
 }) {
@@ -51,12 +53,14 @@ export function StateNotice({
       </Link>
     ) : null);
 
+  const HeadingTag = headingLevel;
+
   return (
     <div className={`border-2 p-5 brutal-shadow-sm ${borderBg}`} role={kind === "error" ? "alert" : "status"}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-1">
           <p className="font-mono text-xs font-bold uppercase">{eyebrow}</p>
-          <h3 className="text-lg font-bold">{heading}</h3>
+          <HeadingTag className="text-lg font-bold">{heading}</HeadingTag>
           {message && <p className="text-sm">{message}</p>}
           {fieldMessages && fieldMessages.length > 0 && (
             <ul className="list-inside list-disc space-y-0.5 pt-1 text-xs">

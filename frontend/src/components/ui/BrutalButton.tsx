@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
-type Variant = "signal" | "secondary" | "danger" | "ghost";
+type Variant = "signal" | "secondary" | "danger" | "ghost" | "ink";
 
 interface BrutalButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
@@ -12,6 +12,7 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   secondary: "bg-surface text-ink hover:bg-surface-muted",
   danger: "bg-status-dead-bg text-status-dead-ink hover:bg-red-200",
   ghost: "bg-transparent text-ink shadow-none border-transparent hover:border-ink hover:bg-surface-muted",
+  ink: "bg-ink text-signal hover:bg-neutral-800",
 };
 
 export function BrutalButton({

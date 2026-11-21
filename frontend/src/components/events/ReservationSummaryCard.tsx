@@ -127,8 +127,8 @@ export function ReservationSummaryCard({
             </p>
           </div>
           <BrutalButton
-            variant="secondary"
-            className="mt-4 w-full bg-ink text-signal"
+            variant="ink"
+            className="mt-4 w-full"
             disabled
           >
             Reserve Tickets (Buyer Only)
@@ -136,9 +136,9 @@ export function ReservationSummaryCard({
         </>
       ) : (
         <BrutalButton
-          variant="secondary"
-          className="mt-5 w-full bg-ink text-signal hover:bg-neutral-800 hover:text-signal"
-          disabled={isSubmitting || totalSelected === 0 || remainingAllowance === 0}
+          variant="ink"
+          className="mt-5 w-full"
+          disabled={isSubmitting || totalSelected === 0 || remainingAllowance === 0 || totalSelected > remainingAllowance}
           onClick={onSubmit}
         >
           {isSubmitting ? "Locking Quota..." : "Reserve Tickets (15m Hold)"}

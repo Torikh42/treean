@@ -1413,8 +1413,11 @@ func TestRouter_CORS(t *testing.T) {
 		if got := optRec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, DELETE, OPTIONS" {
 			t.Fatalf("Access-Control-Allow-Methods = %q, want GET, POST, PUT, DELETE, OPTIONS", got)
 		}
-		if got := optRec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role" {
-			t.Fatalf("Access-Control-Allow-Headers = %q, want Content-Type, Authorization, X-User-ID, X-User-Role", got)
+		if got := optRec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key" {
+			t.Fatalf("Access-Control-Allow-Headers = %q, want Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key", got)
+		}
+		if got := optRec.Header().Get("Access-Control-Expose-Headers"); got != "Idempotent-Replay, Retry-After" {
+			t.Fatalf("Access-Control-Expose-Headers = %q, want Idempotent-Replay, Retry-After", got)
 		}
 
 		disallowedReq := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)

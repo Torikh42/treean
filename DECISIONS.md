@@ -53,11 +53,14 @@ Dokumen ini menjelaskan keputusan desain utama di proyek **Treean (`github.com/T
 
 ## ADR-003: Kunci Baris Terurut (`ORDER BY id ASC FOR UPDATE`) untuk Anti-Oversell
 
-- **Masalah:** Ada dua risiko utama saat flash sale:
+- **Masalah:** Ada tiga risiko utama saat flash sale:
   1. **Oversell:** `200` pembeli memesan `100` tiket di milidetik yang sama.
-  2. **Deadlock AB-BA:** Pembeli boleh membeli lebih dari 1 tipe tiket dalam satu order. Kalau Pembeli A mengunci `[VIP -> Reguler]` sedangkan Pembeli B mengunci `[Reguler -> VIP]` bersamaan, keduanya bisa saling mengunci selamanya (*deadlock* `40P01`).
-- **Keputusan:** Sebelum mengurangi `remaining_quota`, transaksi mengunci seluruh baris `ticket_types` yang diminta secara berurutan dari UUID terkecil:
-  `SELECT ... FROM ticket_types WHERE id = ANY($1) AND event_id = $2 ORDER BY id ASC FOR UPDATE`, lalu diperkuat oleh batas database `CHECK (remaining_quota >= 0 AND remaining_quota <= total_quota)`. Pada aksi pembatalan, kadaluarsa, atau webhook, baris `orders` dikunci terlebih dahulu sebelum mengunci `ticket_types` secara terurut `ASC`.
+  2. **Deadlock AB-BA Antar-Pembeli:** Pembeli boleh membeli lebih dari 1 tipe tiket dalam satu order. Kalau Pembeli A mengunci `[VIP -> Reguler]` sedangkan Pembeli B mengunci `[Reguler -> VIP]` bersamaan, keduanya bisa saling mengunci selamanya (*deadlock* `40P01`).
+  3. **Deadlock AB-BA Organizer vs Checkout:** Saat organizer mengedit event (`UpdateWithTiers`), transaksi mengunci baris `events` lalu `ticket_types`. Sebaliknya, checkout pembeli mengunci `ticket_types` (`FOR UPDATE`) lalu melakukan `INSERT INTO orders` yang mengambil kunci *foreign key* `FOR KEY SHARE` ke `events(id)`. Jika edit event memakai `FOR UPDATE` penuh pada `events`, kedua transaksi bisa saling tunggu (`40P01`).
+- **Keputusan:**
+  - Sebelum mengurangi `remaining_quota`, transaksi checkout mengunci seluruh baris `ticket_types` yang diminta secara berurutan dari UUID terkecil: `SELECT ... FROM ticket_types WHERE id = ANY($1) AND event_id = $2 ORDER BY id ASC FOR UPDATE`, lalu diperkuat oleh batas database `CHECK (remaining_quota >= 0 AND remaining_quota <= total_quota)`.
+  - Pada aksi pembatalan, kadaluarsa, atau webhook, baris `orders` dikunci terlebih dahulu sebelum mengunci `ticket_types` secara terurut `ASC`.
+  - Pada edit event (`UpdateWithTiers`), baris `events` dikunci dengan `SELECT organizer_id FROM events WHERE id = $1 FOR NO KEY UPDATE`. Kunci `FOR NO KEY UPDATE` tetap menserialisasi edit/hapus event antar-organizer tetapi kompatibel dengan `FOR KEY SHARE` milik `INSERT INTO orders`, sehingga menghilangkan potensi deadlock `40P01` antara organizer dan pembeli.
 - **Kenapa Tidak Optimistic Locking (`version` column)?**
   Pada flash sale dengan `200` request paralel ke baris yang sama, `199` request lain akan gagal bentrok `version` meskipun kuota sebenarnya masih tersisa `99`. Client harus mengulang (*retry storm*) yang makin membebani server. Dengan `FOR UPDATE`, PostgreSQL mengantrekan transaksi secara rapi: tepat `100` pembeli berhasil dan `100` sisanya langsung mendapat `409 QUOTA_EXHAUSTED`.
 - **Pengorbanan:** Pemesanan ke event yang sama dieksekusi bergantian di level baris tiket, bukan paralel penuh. Untuk ribuan transaksi, antrean PostgreSQL ini selesai dalam puluhan milidetik dengan kepastian stok 100% akurat.
@@ -78,12 +81,14 @@ Dokumen ini menjelaskan keputusan desain utama di proyek **Treean (`github.com/T
 
 ## ADR-005: Gabungan Ticker `5 Detik` (`SKIP LOCKED`) & Pengecekan Langsung (*Lazy Check*)
 
-- **Masalah:** Pesanan yang tidak dibayar lewat dari `15 menit` harus otomatis berubah menjadi `EXPIRED`, mengembalikan kuota ke pool, dan endpoint `GET /api/v1/events` harus menampilkan stok terbaru saat itu juga.
-- **Keputusan:** Menggabungkan dua mekanisme berbasis jam database PostgreSQL (`NOW()`):
-  1. **Worker Periodik (`worker.ExpirySweeper`, tiap `5 detik`):** Mengambil maksimal `50` order kadaluarsa dengan `ORDER BY id ASC FOR UPDATE SKIP LOCKED LIMIT 50`, mengembalikan `remaining_quota`, mengubah status menjadi `EXPIRED`, mencatat audit ke `order_logs`, dan menghapus cache Redis event yang terdampak.
-  2. **Lazy Check dengan Partial Index:** Tabel `orders` punya partial index `idx_orders_active_expiry` dan `idx_orders_global_expiry` (`WHERE status = 'WAITING_PAYMENT'`). Sebelum membaca stok acara atau membuat order baru, sistem memeriksa dulu apakah ada order lewat waktu dan langsung melepaskannya saat itu juga.
-- **Posisi PostgreSQL vs Redis:** Penjadwalan expiry `15 menit` sengaja tetap dipegang penuh oleh PostgreSQL (bukan antrean delay di Redis) agar tidak pernah terjadi selisih data antara state timer Redis dan stok database. Redis yang ditambahkan belakangan di `ADR-009` murni berperan sebagai layer pembantu (*rate limiter* dan cache `3 detik`), dan `ExpirySweeper` bertugas membersihkan cache tersebut setiap selesai menyapu order kadaluarsa.
-- **Pengorbanan:** Jika suatu saat API dijalankan banyak replika, klausa `FOR UPDATE SKIP LOCKED` memastikan dua worker tidak pernah mengambil dan me-restock order yang sama dua kali. Sebaliknya, saat tidak ada order kadaluarsa, query pengecekan partial index sangat ringan dan tidak mengunci baris apa pun.
+- **Masalah:** Pesanan yang tidak dibayar lewat dari `15 menit` harus otomatis berubah menjadi `EXPIRED`, mengembalikan kuota ke pool, dan endpoint `GET /api/v1/events` maupun `GET /api/v1/orders/{id}` harus menampilkan stok serta status terbaru saat itu juga.
+- **Keputusan:** Menggabungkan dua mekanisme dengan parameter waktu UTC eksplisit (`time.Now().UTC()`) yang dikirim dari layer aplikasi Go ke query PostgreSQL:
+  1. **Worker Periodik (`worker.ExpirySweeper`, tiap `5 detik`):** Mengambil batch `50` order kadaluarsa dengan `ORDER BY id ASC FOR UPDATE SKIP LOCKED LIMIT 50` (dan mengulang hingga maksimal `10` batch atau `500` order dalam satu siklus bila terjadi lonjakan), mengembalikan `remaining_quota`, mengubah status menjadi `EXPIRED`, mencatat audit ke `order_logs`, dan menghapus cache Redis event yang terdampak.
+  2. **Lazy Check dengan Partial Index:** Tabel `orders` punya partial index `idx_orders_active_expiry` dan `idx_orders_global_expiry` (`WHERE status = 'WAITING_PAYMENT'`). Sebelum membaca stok acara, melihat detail order, mengedit kuota event, atau membuat order baru, sistem memeriksa apakah ada order lewat waktu (`expires_at < $nowUTC`) dan langsung melepaskannya saat itu juga. Selain itu, perhitungan jatah 4 tiket per pembeli hanya menghitung order `WAITING_PAYMENT` yang belum lewat waktu (`expires_at >= $nowUTC`).
+- **Posisi PostgreSQL vs Redis:** Penjadwalan expiry `15 menit` sengaja tetap dipegang penuh oleh PostgreSQL (bukan antrean delay di Redis) agar tidak pernah terjadi selisih data antara state timer Redis dan stok database. Redis yang ditambahkan di `ADR-009` murni berperan sebagai layer pembantu (*rate limiter* dan cache `3 detik`), dan setiap proses *expiry* (baik worker maupun *lazy check*) otomatis menghapus cache tersebut.
+- **Pengorbanan & Jam Aplikasi vs `NOW()` Database:**
+  - Mengirim timestamp `nowUTC` sebagai parameter dari Go memudahkan pengujian unit dan integrasi deterministik (menguji batas kadaluarsa ke milidetik tanpa harus tidur `15 menit`).
+  - Pada deployment multi-replika, pendekatan jam aplikasi mengasumsikan node API tersinkronisasi NTP; jika selisih jam antar-server (*clock skew*) tidak bisa dikontrol, perbandingan `expires_at` dapat dialihkan langsung ke fungsi `NOW()` milik PostgreSQL. Klausa `FOR UPDATE SKIP LOCKED` tetap memastikan dua replika worker tidak pernah memproses dan me-restock order yang sama dua kali.
 
 ---
 

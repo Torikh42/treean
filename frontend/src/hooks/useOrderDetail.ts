@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -15,11 +15,25 @@ import { useCountdown } from "@/hooks/useCountdown";
 
 export function useOrderDetail(orderId: string) {
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState<ParsedApiError | null>(null);
+  const [actionErrorState, setActionErrorState] = useState<{
+    orderId: string;
+    error: ParsedApiError;
+  } | null>(null);
+  const actionError = actionErrorState?.orderId === orderId ? actionErrorState.error : null;
+  const setActionError = (error: ParsedApiError | null) => {
+    setActionErrorState(error ? { orderId, error } : null);
+  };
   const orderQuery = useQuery(getOrderOptions({ path: { id: orderId } }));
   const order = orderQuery.data;
   const isWaiting = order?.status === "WAITING_PAYMENT";
   const countdown = useCountdown(order?.expires_at, Boolean(isWaiting));
+  const orderRefetch = orderQuery.refetch;
+
+  useEffect(() => {
+    if (isWaiting && countdown.isExpired) {
+      void orderRefetch();
+    }
+  }, [isWaiting, countdown.isExpired, orderRefetch]);
 
   function invalidateOrderScope(eventId?: string) {
     void queryClient.invalidateQueries({ queryKey: getOrderQueryKey({ path: { id: orderId } }) });

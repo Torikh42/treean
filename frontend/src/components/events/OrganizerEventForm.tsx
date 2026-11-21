@@ -79,6 +79,7 @@ export function OrganizerEventForm({
       )}
 
       <form
+        noValidate
         className="space-y-5"
         onSubmit={(e) => {
           e.preventDefault();
@@ -160,29 +161,29 @@ export function OrganizerEventForm({
                   key={tier.id ?? `new-tier-${idx}`}
                   className="space-y-2 border-2 border-ink bg-canvas p-3"
                 >
-                  <div className="grid items-end gap-3 sm:grid-cols-4">
-                    <label className="block text-xs font-bold uppercase sm:col-span-2">
+                  <div className="grid items-end gap-3 sm:grid-cols-12">
+                    <label className="block min-w-0 text-xs font-bold uppercase sm:col-span-5">
                       Tier Name
                       <input
                         type="text"
                         value={tier.name}
                         onChange={(e) => onUpdateTier(idx, { name: e.target.value })}
                         placeholder="Reguler"
-                        className="mt-1 min-h-[44px] w-full border-2 border-ink bg-surface px-3 text-sm font-normal normal-case"
+                        className="mt-1 min-h-[44px] w-full min-w-0 border-2 border-ink bg-surface px-3 text-sm font-normal normal-case"
                       />
                     </label>
-                    <label className="block text-xs font-bold uppercase">
+                    <label className="block min-w-0 text-xs font-bold uppercase sm:col-span-3">
                       Price (IDR)
                       <input
                         type="number"
                         min={0}
                         value={tier.price_idr}
                         onChange={(e) => onUpdateTier(idx, { price_idr: Number(e.target.value) })}
-                        className="mt-1 min-h-[44px] w-full border-2 border-ink bg-surface px-3 font-mono text-sm font-normal"
+                        className="mt-1 min-h-[44px] w-full min-w-0 border-2 border-ink bg-surface px-3 font-mono text-sm font-normal"
                       />
                     </label>
-                    <div className="flex items-end gap-2">
-                      <label className="block flex-1 text-xs font-bold uppercase">
+                    <div className="flex items-end gap-2 sm:col-span-4">
+                      <label className="block min-w-0 flex-1 text-xs font-bold uppercase">
                         Total Quota
                         <input
                           type="number"
@@ -192,12 +193,12 @@ export function OrganizerEventForm({
                           onChange={(e) =>
                             onUpdateTier(idx, { total_quota: Number(e.target.value) })
                           }
-                          className="mt-1 min-h-[44px] w-full border-2 border-ink bg-surface px-3 font-mono text-sm font-normal"
+                          className="mt-1 min-h-[44px] w-full min-w-0 border-2 border-ink bg-surface px-3 font-mono text-sm font-normal"
                         />
                       </label>
                       <BrutalButton
                         variant="danger"
-                        disabled={tiers.length <= MIN_EVENT_TIERS}
+                        disabled={tiers.length <= MIN_EVENT_TIERS || soldOrHeld > 0}
                         aria-label={`Remove tier ${tier.name || idx + 1}`}
                         onClick={() => onRemoveTier(idx)}
                       >

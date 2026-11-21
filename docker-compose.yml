@@ -38,7 +38,7 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     expose:
       - "8080"
     healthcheck:
@@ -50,7 +50,7 @@ services:
       # Container always binds :8080 behind the Nginx single entry point.
       PORT: "8080"
       DATABASE_URL: postgres://${POSTGRES_USER:-ticketing}:${POSTGRES_PASSWORD:-ticketing_secret}@postgres:5432/${POSTGRES_DB:-event_ticketing}?sslmode=disable
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_URL: ${COMPOSE_REDIS_URL:-redis://redis:6379/0}
       REDIS_TIMEOUT: ${REDIS_TIMEOUT:-500ms}
       EVENT_CACHE_TTL: ${EVENT_CACHE_TTL:-3s}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}

@@ -5,10 +5,12 @@ interface StatusBadgeProps {
 const STATUS_STYLE: Record<string, string> = {
   PAID: "bg-status-paid-bg text-status-paid-ink border-status-paid-ink",
   PROCESSED_PAID: "bg-status-paid-bg text-status-paid-ink border-status-paid-ink",
+  ZERO_OVERSELL: "bg-status-paid-bg text-status-paid-ink border-status-paid-ink",
   WAITING_PAYMENT: "bg-status-wait-bg text-status-wait-ink border-status-wait-ink",
   IGNORED_DUPLICATE: "bg-surface-muted text-ink border-ink",
   CANCELLED: "bg-status-dead-bg text-status-dead-ink border-status-dead-ink",
   EXPIRED: "bg-status-dead-bg text-status-dead-ink border-status-dead-ink",
+  OVERSELL_DETECTED: "bg-status-dead-bg text-status-dead-ink border-status-dead-ink",
   REJECTED_LATE_EXPIRED: "bg-status-dead-bg text-status-dead-ink border-status-dead-ink",
   PROCESSED_FAILED: "bg-status-dead-bg text-status-dead-ink border-status-dead-ink",
   SIGNATURE_INVALID: "bg-status-dead-bg text-status-dead-ink border-status-dead-ink",

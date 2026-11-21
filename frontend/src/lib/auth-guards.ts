@@ -6,9 +6,17 @@ import {
   type UserRole,
 } from "@/store/auth-store";
 
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+
 export function safeRedirectPath(raw?: unknown): string {
   if (typeof raw !== "string") return "/";
-  if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) {
+  if (
+    !raw.startsWith("/") ||
+    raw.startsWith("//") ||
+    raw.includes("\\") ||
+    CONTROL_CHAR_RE.test(raw)
+  ) {
     return "/";
   }
   return raw;
@@ -23,7 +31,8 @@ export function resolvePostAuthRedirect(rawRedirect: unknown, role: UserRole): s
     typeof rawRedirect !== "string" ||
     !rawRedirect.startsWith("/") ||
     rawRedirect.startsWith("//") ||
-    rawRedirect.includes("\\")
+    rawRedirect.includes("\\") ||
+    CONTROL_CHAR_RE.test(rawRedirect)
   ) {
     return defaultHomeForRole(role);
   }

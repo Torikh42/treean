@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_event_date_created
     ON events (event_date ASC, created_at ASC);
 
+CREATE INDEX IF NOT EXISTS idx_events_organizer_date
+    ON events (organizer_id, event_date ASC, created_at ASC);
+
 CREATE TABLE IF NOT EXISTS ticket_types (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     event_id UUID NOT NULL REFERENCES events(id) ON DELETE CASCADE,
@@ -68,6 +71,9 @@ CREATE INDEX IF NOT EXISTS idx_orders_global_expiry
     ON orders (expires_at)
     WHERE status = 'WAITING_PAYMENT';
 
+CREATE INDEX IF NOT EXISTS idx_orders_event_id
+    ON orders (event_id);
+
 CREATE TABLE IF NOT EXISTS order_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -78,6 +84,9 @@ CREATE TABLE IF NOT EXISTS order_items (
     CHECK (subtotal_idr = unit_price_idr * quantity::bigint),
     UNIQUE (order_id, ticket_type_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_order_items_ticket_type_id
+    ON order_items (ticket_type_id);
 
 CREATE TABLE IF NOT EXISTS order_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

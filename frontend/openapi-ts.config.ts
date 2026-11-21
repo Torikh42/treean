@@ -5,12 +5,7 @@ export default defineConfig({
   output: "src/lib/api/generated",
   plugins: [
     "@hey-api/typescript",
-    {
-      name: "@hey-api/sdk",
-      validator: {
-        response: "zod",
-      },
-    },
+    "@hey-api/sdk",
     "@hey-api/client-fetch",
     "zod",
     {

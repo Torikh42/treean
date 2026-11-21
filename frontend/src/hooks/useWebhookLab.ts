@@ -16,17 +16,65 @@ interface WebhookLabInitial {
   initialGrossAmount?: number;
 }
 
+interface WebhookFormState {
+  key: string;
+  orderId: string;
+  statusCode: string;
+  grossAmount: number;
+  webhookSecret: string;
+  signatureKey: string;
+}
+
 export function useWebhookLab(initial?: WebhookLabInitial) {
   const queryClient = useQueryClient();
+  const initialKey = `${initial?.initialOrderId ?? ""}:${initial?.initialGrossAmount ?? ""}`;
   const [transactionId, setTransactionId] = useState(() => `lab-${Date.now()}`);
-  const [orderId, setOrderId] = useState(initial?.initialOrderId ?? "");
-  const [statusCode, setStatusCode] = useState("200");
-  const [grossAmount, setGrossAmount] = useState(initial?.initialGrossAmount ?? 150000);
   const [transactionStatus, setTransactionStatus] = useState("settlement");
-  const [webhookSecret, setWebhookSecret] = useState("dev-webhook-secret-change-in-production");
-  const [signatureKey, setSignatureKey] = useState("");
+  const [formState, setFormState] = useState<WebhookFormState>(() => ({
+    key: initialKey,
+    orderId: initial?.initialOrderId ?? "",
+    statusCode: "200",
+    grossAmount: initial?.initialGrossAmount ?? 150000,
+    webhookSecret: "dev-webhook-secret-change-in-production",
+    signatureKey: "",
+  }));
   const [lastResult, setLastResult] = useState<WebhookResult | null>(null);
   const [lastError, setLastError] = useState<ParsedApiError | null>(null);
+
+  function resolveCurrent(prev: WebhookFormState): WebhookFormState {
+    if (prev.key === initialKey) return prev;
+    return {
+      key: initialKey,
+      orderId: initial?.initialOrderId ?? prev.orderId,
+      statusCode: prev.statusCode,
+      grossAmount: initial?.initialGrossAmount ?? prev.grossAmount,
+      webhookSecret: prev.webhookSecret,
+      signatureKey: "",
+    };
+  }
+
+  const currentForm = resolveCurrent(formState);
+  const { orderId, statusCode, grossAmount, webhookSecret, signatureKey } = currentForm;
+
+  function setOrderId(val: string) {
+    setFormState((prev) => ({ ...resolveCurrent(prev), orderId: val, signatureKey: "" }));
+  }
+
+  function setStatusCode(val: string) {
+    setFormState((prev) => ({ ...resolveCurrent(prev), statusCode: val, signatureKey: "" }));
+  }
+
+  function setGrossAmount(val: number) {
+    setFormState((prev) => ({ ...resolveCurrent(prev), grossAmount: val, signatureKey: "" }));
+  }
+
+  function setWebhookSecret(val: string) {
+    setFormState((prev) => ({ ...resolveCurrent(prev), webhookSecret: val, signatureKey: "" }));
+  }
+
+  function setSignatureKey(val: string) {
+    setFormState((prev) => ({ ...resolveCurrent(prev), signatureKey: val }));
+  }
 
   const hookMut = useMutation({
     ...paymentWebhookMutation(),

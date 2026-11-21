@@ -412,3 +412,61 @@ func TestExpirySweeper_InvalidatesEventCacheOnExpiredOrders(t *testing.T) {
 		t.Fatalf("unexpected invalidated event IDs: %+v", cache.calls)
 	}
 }
+
+type multiBatchExpiryMock struct {
+	mu      sync.Mutex
+	batches []struct {
+		expired int
+		events  []uuid.UUID
+	}
+	idx int
+}
+
+func (m *multiBatchExpiryMock) ExpireDueOrders(context.Context, *uuid.UUID, int, string, time.Time) (int, error) {
+	return 0, nil
+}
+
+func (m *multiBatchExpiryMock) ExpireDueOrdersWithEvents(_ context.Context, _ *uuid.UUID, _ int, _ string, _ time.Time) (int, []uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.idx >= len(m.batches) {
+		return 0, nil, nil
+	}
+	b := m.batches[m.idx]
+	m.idx++
+	return b.expired, b.events, nil
+}
+
+func TestExpirySweeper_DrainsMultipleFullBatchesInSingleTick(t *testing.T) {
+	t.Parallel()
+
+	evA := uuid.New()
+	evB := uuid.New()
+	evC := uuid.New()
+	store := &multiBatchExpiryMock{
+		batches: []struct {
+			expired int
+			events  []uuid.UUID
+		}{
+			{expired: 10, events: []uuid.UUID{evA, evB}},
+			{expired: 10, events: []uuid.UUID{evB, evC}},
+			{expired: 4, events: []uuid.UUID{evA}},
+		},
+	}
+	cache := &spyEventCacheInvalidator{}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	worker.NewExpirySweeper(store, logger, time.Second, 10).WithCache(cache).RunOnce(t.Context())
+
+	if store.idx != 3 {
+		t.Fatalf("batch calls = %d, want 3", store.idx)
+	}
+	if len(cache.calls) != 1 || len(cache.calls[0]) != 3 {
+		t.Fatalf("expected 1 deduplicated InvalidateEvents call with 3 events, got %+v", cache.calls)
+	}
+	rec := decodeLogRecord(t, buf.Bytes())
+	if rec.ExpiredCount != 24 {
+		t.Fatalf("logged expired_count = %d, want 24", rec.ExpiredCount)
+	}
+}

@@ -13,9 +13,11 @@ const (
 	headerAllowOrigin      = "Access-Control-Allow-Origin"
 	headerAllowMethods     = "Access-Control-Allow-Methods"
 	headerAllowHeaders     = "Access-Control-Allow-Headers"
+	headerExposeHeaders    = "Access-Control-Expose-Headers"
 	headerMaxAge           = "Access-Control-Max-Age"
 	corsAllowedMethods     = "GET, POST, PUT, DELETE, OPTIONS"
-	corsAllowedHeaders     = "Content-Type, Authorization, X-User-ID, X-User-Role"
+	corsAllowedHeaders     = "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key"
+	corsExposedHeaders     = "Idempotent-Replay, Retry-After"
 	corsPreflightMaxAgeSec = "600"
 )
 
@@ -33,6 +35,7 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				h.Set(headerAllowOrigin, acao)
 				h.Set(headerAllowMethods, corsAllowedMethods)
 				h.Set(headerAllowHeaders, corsAllowedHeaders)
+				h.Set(headerExposeHeaders, corsExposedHeaders)
 				h.Set(headerMaxAge, corsPreflightMaxAgeSec)
 			}
 

@@ -51,8 +51,8 @@ export function useLoginForm(redirectPath?: string) {
       setSubmitError(null);
       const role = normalizeUserRole(data.user.role);
       setJwtSession(data.user, data.access_token);
-      queryClient.setQueryData(getMeQueryKey(), data.user);
-      void queryClient.invalidateQueries();
+      queryClient.clear();
+      queryClient.setQueryData([...getMeQueryKey(), data.access_token], data.user);
       toast.success(`Signed in as ${data.user.email} (${role})`);
       const target = resolvePostAuthRedirect(redirectPath, role);
       void navigate({ href: target });
@@ -104,8 +104,8 @@ export function useRegisterForm(redirectPath?: string) {
       setSubmitError(null);
       const role = normalizeUserRole(data.user.role);
       setJwtSession(data.user, data.access_token);
-      queryClient.setQueryData(getMeQueryKey(), data.user);
-      void queryClient.invalidateQueries();
+      queryClient.clear();
+      queryClient.setQueryData([...getMeQueryKey(), data.access_token], data.user);
       toast.success(`Registered ${data.user.email} (${role})`);
       const target = resolvePostAuthRedirect(redirectPath, role);
       void navigate({ href: target });

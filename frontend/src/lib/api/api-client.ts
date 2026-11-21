@@ -30,6 +30,34 @@ export function configureApiClient(): void {
 
     return new Request(request, { headers });
   });
+
+  client.interceptors.error.use((error, response, request) => {
+    if (response?.status === 401) {
+      const reqUrl = request?.url ?? "";
+      if (!reqUrl.includes("/api/v1/auth/login") && !reqUrl.includes("/api/v1/webhooks/payment")) {
+        useAuthStore.getState().clearSession();
+      }
+    }
+
+    if (response && typeof error === "string") {
+      return {
+        status: response.status,
+        error_code:
+          response.status === 429
+            ? "RATE_LIMITED"
+            : response.status === 401
+              ? "UNAUTHORIZED"
+              : "INTERNAL_ERROR",
+        title: response.statusText || "HTTP Error",
+        detail:
+          response.status === 429
+            ? "Too many requests at edge proxy. Please wait a moment and try again."
+            : `HTTP ${response.status} from gateway.`,
+      };
+    }
+
+    return error;
+  });
 }
 
 export async function fetchApiHealth(): Promise<{ status: string }> {
