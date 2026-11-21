@@ -41,8 +41,8 @@ func TestAPIError_NilAndStatusBehavior(t *testing.T) {
 
 	rateErr := domain.NewRateLimitedError("too many login attempts").WithRetryAfter(15 * time.Second)
 	mapped := handler.MapServiceError(context.Background(), nil, rateErr)
-	headersErr, ok := mapped.(huma.HeadersError)
-	if !ok {
+	var headersErr huma.HeadersError
+	if !errors.As(mapped, &headersErr) {
 		t.Fatalf("expected mapped rate-limited error to implement huma.HeadersError, got %T", mapped)
 	}
 	if got := headersErr.GetHeaders().Get("Retry-After"); got != "15" {
