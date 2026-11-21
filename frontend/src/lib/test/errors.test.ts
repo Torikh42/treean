@@ -96,6 +96,15 @@ describe("parseApiError", () => {
     expect(parsed.detail).toBe("Failed to fetch");
   });
 
+  it("maps ZodError instances to INTERNAL_ERROR instead of misleading NETWORK_ERROR", () => {
+    const zodErr = new Error("Invalid ISO datetime");
+    zodErr.name = "ZodError";
+    const parsed = parseApiError(zodErr);
+    expect(parsed.code).toBe("INTERNAL_ERROR");
+    expect(parsed.userTitle).toBe("Response validation error");
+    expect(parsed.detail).toBe("Invalid ISO datetime");
+  });
+
   it("maps RATE_LIMITED (429) with retry guidance", () => {
     const parsed = parseApiError({
       title: "Too Many Requests",

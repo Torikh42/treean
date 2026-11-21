@@ -3,7 +3,6 @@
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
 import type { CancelOrderData, CancelOrderErrors, CancelOrderResponses, CreateEventData, CreateEventErrors, CreateEventResponses, CreateOrderData, CreateOrderErrors, CreateOrderResponses, DeleteEventData, DeleteEventErrors, DeleteEventResponses, DemoFlashSaleData, DemoFlashSaleErrors, DemoFlashSaleResponses, GetEventData, GetEventErrors, GetEventResponses, GetMeData, GetMeErrors, GetMeResponses, GetOrderData, GetOrderErrors, GetOrderResponses, ListEventsData, ListEventsErrors, ListEventsResponses, ListMyOrdersData, ListMyOrdersErrors, ListMyOrdersResponses, ListOrganizerEventsData, ListOrganizerEventsErrors, ListOrganizerEventsResponses, LoginUserData, LoginUserErrors, LoginUserResponses, PaymentWebhookData, PaymentWebhookErrors, PaymentWebhookResponses, PayOrderDemoData, PayOrderDemoErrors, PayOrderDemoResponses, RegisterUserData, RegisterUserErrors, RegisterUserResponses, UpdateEventData, UpdateEventErrors, UpdateEventResponses } from './types.gen';
-import { zCancelOrderResponse, zCreateEventResponse, zCreateOrderResponse, zDeleteEventResponse, zDemoFlashSaleResponse, zGetEventResponse, zGetMeResponse, zGetOrderResponse, zListEventsResponse, zListMyOrdersResponse, zListOrganizerEventsResponse, zLoginUserResponse, zPaymentWebhookResponse, zPayOrderDemoResponse, zRegisterUserResponse, zUpdateEventResponse } from './zod.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -23,7 +22,6 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
  * Login with email and password to receive a Bearer JWT
  */
 export const loginUser = <ThrowOnError extends boolean = false>(options: Options<LoginUserData, ThrowOnError>): RequestResult<LoginUserResponses, LoginUserErrors, ThrowOnError> => (options.client ?? client).post<LoginUserResponses, LoginUserErrors, ThrowOnError>({
-    responseValidator: async (data) => await zLoginUserResponse.parseAsync(data),
     url: '/api/v1/auth/login',
     ...options,
     headers: {
@@ -36,7 +34,6 @@ export const loginUser = <ThrowOnError extends boolean = false>(options: Options
  * Get authenticated user profile
  */
 export const getMe = <ThrowOnError extends boolean = false>(options?: Options<GetMeData, ThrowOnError>): RequestResult<GetMeResponses, GetMeErrors, ThrowOnError> => (options?.client ?? client).get<GetMeResponses, GetMeErrors, ThrowOnError>({
-    responseValidator: async (data) => await zGetMeResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/auth/me',
     ...options
@@ -46,7 +43,6 @@ export const getMe = <ThrowOnError extends boolean = false>(options?: Options<Ge
  * Register an organizer or buyer account
  */
 export const registerUser = <ThrowOnError extends boolean = false>(options: Options<RegisterUserData, ThrowOnError>): RequestResult<RegisterUserResponses, RegisterUserErrors, ThrowOnError> => (options.client ?? client).post<RegisterUserResponses, RegisterUserErrors, ThrowOnError>({
-    responseValidator: async (data) => await zRegisterUserResponse.parseAsync(data),
     url: '/api/v1/auth/register',
     ...options,
     headers: {
@@ -59,7 +55,6 @@ export const registerUser = <ThrowOnError extends boolean = false>(options: Opti
  * Execute concurrent buyer spike benchmark (default: 200 requests vs 100 quota)
  */
 export const demoFlashSale = <ThrowOnError extends boolean = false>(options?: Options<DemoFlashSaleData, ThrowOnError>): RequestResult<DemoFlashSaleResponses, DemoFlashSaleErrors, ThrowOnError> => (options?.client ?? client).post<DemoFlashSaleResponses, DemoFlashSaleErrors, ThrowOnError>({
-    responseValidator: async (data) => await zDemoFlashSaleResponse.parseAsync(data),
     url: '/api/v1/demo/flash-sale',
     ...options,
     headers: {
@@ -71,17 +66,12 @@ export const demoFlashSale = <ThrowOnError extends boolean = false>(options?: Op
 /**
  * List all events with live remaining ticket quotas
  */
-export const listEvents = <ThrowOnError extends boolean = false>(options?: Options<ListEventsData, ThrowOnError>): RequestResult<ListEventsResponses, ListEventsErrors, ThrowOnError> => (options?.client ?? client).get<ListEventsResponses, ListEventsErrors, ThrowOnError>({
-    responseValidator: async (data) => await zListEventsResponse.parseAsync(data),
-    url: '/api/v1/events',
-    ...options
-});
+export const listEvents = <ThrowOnError extends boolean = false>(options?: Options<ListEventsData, ThrowOnError>): RequestResult<ListEventsResponses, ListEventsErrors, ThrowOnError> => (options?.client ?? client).get<ListEventsResponses, ListEventsErrors, ThrowOnError>({ url: '/api/v1/events', ...options });
 
 /**
  * Create a new event with 2+ ticket tiers (Organizer only)
  */
 export const createEvent = <ThrowOnError extends boolean = false>(options: Options<CreateEventData, ThrowOnError>): RequestResult<CreateEventResponses, CreateEventErrors, ThrowOnError> => (options.client ?? client).post<CreateEventResponses, CreateEventErrors, ThrowOnError>({
-    responseValidator: async (data) => await zCreateEventResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/events',
     ...options,
@@ -95,7 +85,6 @@ export const createEvent = <ThrowOnError extends boolean = false>(options: Optio
  * Delete an unused event with no orders (Owner organizer only)
  */
 export const deleteEvent = <ThrowOnError extends boolean = false>(options: Options<DeleteEventData, ThrowOnError>): RequestResult<DeleteEventResponses, DeleteEventErrors, ThrowOnError> => (options.client ?? client).delete<DeleteEventResponses, DeleteEventErrors, ThrowOnError>({
-    responseValidator: async (data) => await zDeleteEventResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/events/{id}',
     ...options
@@ -104,17 +93,12 @@ export const deleteEvent = <ThrowOnError extends boolean = false>(options: Optio
 /**
  * Get event details and live remaining quota per ticket tier
  */
-export const getEvent = <ThrowOnError extends boolean = false>(options: Options<GetEventData, ThrowOnError>): RequestResult<GetEventResponses, GetEventErrors, ThrowOnError> => (options.client ?? client).get<GetEventResponses, GetEventErrors, ThrowOnError>({
-    responseValidator: async (data) => await zGetEventResponse.parseAsync(data),
-    url: '/api/v1/events/{id}',
-    ...options
-});
+export const getEvent = <ThrowOnError extends boolean = false>(options: Options<GetEventData, ThrowOnError>): RequestResult<GetEventResponses, GetEventErrors, ThrowOnError> => (options.client ?? client).get<GetEventResponses, GetEventErrors, ThrowOnError>({ url: '/api/v1/events/{id}', ...options });
 
 /**
  * Update an event and its ticket tiers (Owner organizer only)
  */
 export const updateEvent = <ThrowOnError extends boolean = false>(options: Options<UpdateEventData, ThrowOnError>): RequestResult<UpdateEventResponses, UpdateEventErrors, ThrowOnError> => (options.client ?? client).put<UpdateEventResponses, UpdateEventErrors, ThrowOnError>({
-    responseValidator: async (data) => await zUpdateEventResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/events/{id}',
     ...options,
@@ -128,7 +112,6 @@ export const updateEvent = <ThrowOnError extends boolean = false>(options: Optio
  * List authenticated buyer's order history and issued tickets
  */
 export const listMyOrders = <ThrowOnError extends boolean = false>(options?: Options<ListMyOrdersData, ThrowOnError>): RequestResult<ListMyOrdersResponses, ListMyOrdersErrors, ThrowOnError> => (options?.client ?? client).get<ListMyOrdersResponses, ListMyOrdersErrors, ThrowOnError>({
-    responseValidator: async (data) => await zListMyOrdersResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/orders',
     ...options
@@ -138,7 +121,6 @@ export const listMyOrders = <ThrowOnError extends boolean = false>(options?: Opt
  * Reserve 1-4 tickets for 15 minutes (WAITING_PAYMENT)
  */
 export const createOrder = <ThrowOnError extends boolean = false>(options: Options<CreateOrderData, ThrowOnError>): RequestResult<CreateOrderResponses, CreateOrderErrors, ThrowOnError> => (options.client ?? client).post<CreateOrderResponses, CreateOrderErrors, ThrowOnError>({
-    responseValidator: async (data) => await zCreateOrderResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/orders',
     ...options,
@@ -152,7 +134,6 @@ export const createOrder = <ThrowOnError extends boolean = false>(options: Optio
  * Get single order detail with items, status transition logs, and ticket codes
  */
 export const getOrder = <ThrowOnError extends boolean = false>(options: Options<GetOrderData, ThrowOnError>): RequestResult<GetOrderResponses, GetOrderErrors, ThrowOnError> => (options.client ?? client).get<GetOrderResponses, GetOrderErrors, ThrowOnError>({
-    responseValidator: async (data) => await zGetOrderResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/orders/{id}',
     ...options
@@ -162,7 +143,6 @@ export const getOrder = <ThrowOnError extends boolean = false>(options: Options<
  * Cancel an unpaid order and immediately restore quota
  */
 export const cancelOrder = <ThrowOnError extends boolean = false>(options: Options<CancelOrderData, ThrowOnError>): RequestResult<CancelOrderResponses, CancelOrderErrors, ThrowOnError> => (options.client ?? client).post<CancelOrderResponses, CancelOrderErrors, ThrowOnError>({
-    responseValidator: async (data) => await zCancelOrderResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/orders/{id}/cancel',
     ...options
@@ -172,7 +152,6 @@ export const cancelOrder = <ThrowOnError extends boolean = false>(options: Optio
  * Simulate immediate payment for an order (generates valid signature server-side)
  */
 export const payOrderDemo = <ThrowOnError extends boolean = false>(options: Options<PayOrderDemoData, ThrowOnError>): RequestResult<PayOrderDemoResponses, PayOrderDemoErrors, ThrowOnError> => (options.client ?? client).post<PayOrderDemoResponses, PayOrderDemoErrors, ThrowOnError>({
-    responseValidator: async (data) => await zPayOrderDemoResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/orders/{id}/pay',
     ...options
@@ -182,7 +161,6 @@ export const payOrderDemo = <ThrowOnError extends boolean = false>(options: Opti
  * List events owned by the authenticated organizer
  */
 export const listOrganizerEvents = <ThrowOnError extends boolean = false>(options?: Options<ListOrganizerEventsData, ThrowOnError>): RequestResult<ListOrganizerEventsResponses, ListOrganizerEventsErrors, ThrowOnError> => (options?.client ?? client).get<ListOrganizerEventsResponses, ListOrganizerEventsErrors, ThrowOnError>({
-    responseValidator: async (data) => await zListOrganizerEventsResponse.parseAsync(data),
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/organizer/events',
     ...options
@@ -192,7 +170,6 @@ export const listOrganizerEvents = <ThrowOnError extends boolean = false>(option
  * Idempotent SHA-512 signed payment webhook (handles duplicates and post-expiry late captures)
  */
 export const paymentWebhook = <ThrowOnError extends boolean = false>(options?: Options<PaymentWebhookData, ThrowOnError>): RequestResult<PaymentWebhookResponses, PaymentWebhookErrors, ThrowOnError> => (options?.client ?? client).post<PaymentWebhookResponses, PaymentWebhookErrors, ThrowOnError>({
-    responseValidator: async (data) => await zPaymentWebhookResponse.parseAsync(data),
     url: '/api/v1/webhooks/payment',
     ...options,
     headers: {

@@ -125,6 +125,16 @@ export function parseApiError(error: unknown): ParsedApiError {
   }
 
   if (error instanceof Error) {
+    if (error.name === "ZodError") {
+      return {
+        status: 500,
+        code: "INTERNAL_ERROR",
+        detail: error.message || "Response schema validation failed",
+        userTitle: "Response validation error",
+        userMessage: "The server returned data in an unexpected format.",
+        actionHint: "Refresh the page or try again.",
+      };
+    }
     return {
       status: 0,
       code: "NETWORK_ERROR",

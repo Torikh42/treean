@@ -21,6 +21,20 @@ export default defineConfig({
     },
     dedupe: ["react", "react-dom"],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("@tanstack")) return "vendor-tanstack";
+            if (id.includes("zod")) return "vendor-zod";
+            if (id.includes("@phosphor-icons")) return "vendor-icons";
+            return "vendor";
+          }
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

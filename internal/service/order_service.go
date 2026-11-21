@@ -143,7 +143,7 @@ func (s *OrderService) ListOrders(ctx context.Context, actor domain.Actor) ([]do
 	if err := validateAuthenticatedActor(actor); err != nil {
 		return nil, err
 	}
-	if _, err := s.orders.ExpireDueOrders(ctx, nil, lazyExpiryBatchLimit, lazyExpiryActorType, time.Now().UTC()); err != nil {
+	if err := s.sweepAndInvalidate(ctx, nil); err != nil {
 		return nil, err
 	}
 	return s.orders.ListByBuyer(ctx, actor.ID)
@@ -161,6 +161,8 @@ func (s *OrderService) GetOrder(ctx context.Context, actor domain.Actor, orderID
 		return nil, domain.NewDomainError(http.StatusUnprocessableEntity, domain.ErrCodeValidation, "order_id is required")
 	}
 
+	_ = s.sweepAndInvalidate(ctx, nil)
+
 	o, err := s.orders.FindByID(ctx, orderID)
 	if err != nil {
 		return nil, err
@@ -172,6 +174,32 @@ func (s *OrderService) GetOrder(ctx context.Context, actor domain.Actor, orderID
 		return nil, err
 	}
 	return o, nil
+}
+
+func (s *OrderService) sweepAndInvalidate(ctx context.Context, eventID *uuid.UUID) error {
+	nowUTC := time.Now().UTC()
+	if aware, ok := s.orders.(EventAwareExpiryStore); ok {
+		count, touchedEvents, err := aware.ExpireDueOrdersWithEvents(ctx, eventID, lazyExpiryBatchLimit, lazyExpiryActorType, nowUTC)
+		if err != nil {
+			return err
+		}
+		if count > 0 && s.cache != nil {
+			s.cache.InvalidateEvents(ctx, touchedEvents...)
+		}
+		return nil
+	}
+	count, err := s.orders.ExpireDueOrders(ctx, eventID, lazyExpiryBatchLimit, lazyExpiryActorType, nowUTC)
+	if err != nil {
+		return err
+	}
+	if count > 0 && s.cache != nil {
+		if eventID != nil {
+			s.cache.InvalidateEvents(ctx, *eventID)
+		} else {
+			s.cache.InvalidateEvents(ctx)
+		}
+	}
+	return nil
 }
 
 func normalizeOrderItems(items []repository.CheckoutItemInput) ([]repository.CheckoutItemInput, error) {

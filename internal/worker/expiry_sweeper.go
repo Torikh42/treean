@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	defaultSweepInterval  = 5 * time.Second
-	defaultSweepBatchSize = 50
-	defaultSweepTimeout   = 10 * time.Second
-	schedulerActorType    = "scheduler"
+	defaultSweepInterval   = 5 * time.Second
+	defaultSweepBatchSize  = 50
+	defaultSweepTimeout    = 10 * time.Second
+	maxSweepBatchesPerTick = 10
+	schedulerActorType     = "scheduler"
 )
 
 // ExpiryStore exposes batch expiration required by ExpirySweeper.
@@ -90,7 +91,7 @@ func (w *ExpirySweeper) Start(ctx context.Context) {
 	}
 }
 
-// RunOnce executes one bounded sweep cycle with a timeout context.
+// RunOnce executes one bounded sweep cycle with a timeout context, draining up to maxSweepBatchesPerTick full batches.
 func (w *ExpirySweeper) RunOnce(ctx context.Context) {
 	if !w.canRun(ctx) {
 		return
@@ -101,27 +102,50 @@ func (w *ExpirySweeper) RunOnce(ctx context.Context) {
 
 	nowUTC := time.Now().UTC()
 	var (
-		expired       int
-		touchedEvents []uuid.UUID
-		err           error
+		totalExpired     int
+		allTouchedEvents []uuid.UUID
+		seenEvents       = make(map[uuid.UUID]struct{})
 	)
-	if aware, ok := w.store.(EventAwareExpiryStore); ok {
-		expired, touchedEvents, err = aware.ExpireDueOrdersWithEvents(sweepCtx, nil, w.batchSize, schedulerActorType, nowUTC)
-	} else {
-		expired, err = w.store.ExpireDueOrders(sweepCtx, nil, w.batchSize, schedulerActorType, nowUTC)
-	}
-	if err != nil {
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-			w.logger.DebugContext(sweepCtx, "expiry sweep cancelled", slog.String("error", err.Error()))
-			return
+	aware, isAware := w.store.(EventAwareExpiryStore)
+
+	for range maxSweepBatchesPerTick {
+		var (
+			expired       int
+			touchedEvents []uuid.UUID
+			err           error
+		)
+		if isAware {
+			expired, touchedEvents, err = aware.ExpireDueOrdersWithEvents(sweepCtx, nil, w.batchSize, schedulerActorType, nowUTC)
+		} else {
+			expired, err = w.store.ExpireDueOrders(sweepCtx, nil, w.batchSize, schedulerActorType, nowUTC)
 		}
-		w.logger.ErrorContext(sweepCtx, "expiry sweep failed", slog.String("error", err.Error()))
-		return
+		if err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil || sweepCtx.Err() != nil {
+				w.logger.DebugContext(sweepCtx, "expiry sweep cancelled", slog.String("error", err.Error()))
+			} else {
+				w.logger.ErrorContext(sweepCtx, "expiry sweep failed", slog.String("error", err.Error()))
+			}
+			break
+		}
+		totalExpired += expired
+		for _, eid := range touchedEvents {
+			if eid == uuid.Nil {
+				continue
+			}
+			if _, seen := seenEvents[eid]; !seen {
+				seenEvents[eid] = struct{}{}
+				allTouchedEvents = append(allTouchedEvents, eid)
+			}
+		}
+		if expired < w.batchSize || sweepCtx.Err() != nil {
+			break
+		}
 	}
-	if expired > 0 {
-		w.logger.InfoContext(sweepCtx, "expired unpaid orders and restored quota", slog.Int("expired_count", expired))
+
+	if totalExpired > 0 {
+		w.logger.InfoContext(sweepCtx, "expired unpaid orders and restored quota", slog.Int("expired_count", totalExpired))
 		if w.cache != nil {
-			w.cache.InvalidateEvents(sweepCtx, touchedEvents...)
+			w.cache.InvalidateEvents(sweepCtx, allTouchedEvents...)
 		}
 	}
 }

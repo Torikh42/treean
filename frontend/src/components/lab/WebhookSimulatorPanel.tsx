@@ -85,7 +85,7 @@ export function WebhookSimulatorPanel({ lab }: { lab: ReturnType<typeof useWebho
             type="text"
             value={lab.signatureKey}
             onChange={(e) => lab.setSignatureKey(e.target.value)}
-            placeholder="Click Sign SHA-512 below or leave blank to trigger 401 UNAUTHORIZED_WEBHOOK"
+            placeholder="Click Compute Valid SHA-512 below or leave blank to trigger 401 UNAUTHORIZED_WEBHOOK"
             className="mt-1 min-h-[44px] w-full border-2 border-ink bg-surface px-3 font-mono text-xs"
           />
         </label>

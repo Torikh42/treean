@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -81,13 +82,19 @@ func MapServiceError(ctx context.Context, logger *slog.Logger, err error) error 
 		return nil
 	}
 	if de, ok := errors.AsType[*domain.DomainError](err); ok {
-		return &APIError{
+		statusErr := &APIError{
 			status:    de.HTTPStatus,
 			Title:     http.StatusText(de.HTTPStatus),
 			Status:    de.HTTPStatus,
 			Detail:    de.Message,
 			ErrorCode: de.Code,
 		}
+		if de.Code == domain.ErrCodeRateLimited || de.HTTPStatus == http.StatusTooManyRequests {
+			return huma.ErrorWithHeaders(statusErr, http.Header{
+				"Retry-After": []string{strconv.Itoa(max(de.RetryAfterSeconds, 1))},
+			})
+		}
+		return statusErr
 	}
 
 	if ctx == nil {

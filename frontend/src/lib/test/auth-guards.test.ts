@@ -56,6 +56,8 @@ describe("auth guards", () => {
     expect(safeRedirectPath("/\\evil.example")).toBe("/");
     expect(safeRedirectPath("/orders\\bad")).toBe("/");
     expect(safeRedirectPath("\\evil.example")).toBe("/");
+    expect(safeRedirectPath("/\t/evil.example")).toBe("/");
+    expect(safeRedirectPath("/\n/evil.example")).toBe("/");
   });
 
   it("resolves default home per role", () => {

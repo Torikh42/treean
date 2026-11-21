@@ -370,7 +370,7 @@ func loadEventInTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*domain.Event,
 
 func lockEventForOrganizer(ctx context.Context, tx pgx.Tx, eventID, organizerID uuid.UUID, forbiddenMsg string) error {
 	var dbOrganizerID uuid.UUID
-	err := tx.QueryRow(ctx, "SELECT organizer_id FROM events WHERE id = $1 FOR UPDATE", eventID).Scan(&dbOrganizerID)
+	err := tx.QueryRow(ctx, "SELECT organizer_id FROM events WHERE id = $1 FOR NO KEY UPDATE", eventID).Scan(&dbOrganizerID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.NewDomainError(http.StatusNotFound, domain.ErrCodeEventNotFound, errMsgEventNotFound)

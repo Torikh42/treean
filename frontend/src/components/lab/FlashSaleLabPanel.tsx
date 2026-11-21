@@ -80,7 +80,7 @@ export function FlashSaleLabPanel({
         <div className="mt-5 border-2 border-ink bg-canvas p-4">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-ink pb-3">
             <span className="font-mono text-sm font-bold">Measured Server Result ({report.duration_ms} ms)</span>
-            <StatusBadge status={report.zero_oversell ? "PAID" : "EXPIRED"} />
+            <StatusBadge status={report.zero_oversell ? "ZERO_OVERSELL" : "OVERSELL_DETECTED"} />
           </div>
 
           <div className="mt-3 grid gap-3 font-mono sm:grid-cols-4">
@@ -102,7 +102,7 @@ export function FlashSaleLabPanel({
             </div>
           </div>
 
-          <p className="mt-3 font-mono text-xs text-ink-muted">
+          <p className="mt-3 break-all font-mono text-xs text-ink-muted">
             Event ID: {report.event_id} | Zero Oversell: {String(report.zero_oversell)} | Other Failures: {report.rejected_other}
           </p>
         </div>

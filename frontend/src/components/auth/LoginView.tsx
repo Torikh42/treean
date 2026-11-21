@@ -21,7 +21,7 @@ export function LoginView({ login, redirectPath }: LoginViewProps) {
       </div>
 
       {redirectPath && redirectPath !== "/" && (
-        <div className="border-2 border-ink bg-surface-muted px-3 py-2 font-mono text-xs font-bold">
+        <div className="break-all border-2 border-ink bg-surface-muted px-3 py-2 font-mono text-xs font-bold">
           RETURN TARGET: {redirectPath}
         </div>
       )}

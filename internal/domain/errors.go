@@ -1,7 +1,10 @@
 // Package domain defines pure ticketing entities, state transitions, and business errors.
 package domain
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // ErrCodeQuotaExhausted and related constants define machine-readable domain error codes shared across HTTP responses and tests.
 const (
@@ -26,11 +29,22 @@ const (
 	ErrCodeValidation            = "VALIDATION_ERROR"
 )
 
-// DomainError carries an HTTP status code, stable machine code, and client-safe message.
+// DomainError carries an HTTP status code, stable machine code, client-safe message, and optional Retry-After duration.
 type DomainError struct { //nolint:revive // Explicit DomainError name prevents shadowing Go's built-in error interface.
-	Code       string
-	HTTPStatus int
-	Message    string
+	Code              string
+	HTTPStatus        int
+	Message           string
+	RetryAfterSeconds int
+}
+
+// WithRetryAfter attaches a rounded-up positive Retry-After duration in seconds to a DomainError.
+func (e *DomainError) WithRetryAfter(d time.Duration) *DomainError {
+	if e == nil {
+		return nil
+	}
+	seconds := max(int((d+time.Second-1)/time.Second), 1)
+	e.RetryAfterSeconds = seconds
+	return e
 }
 
 // Error implements the standard error interface.

@@ -7,10 +7,10 @@ import { useHealthCheck } from "@/hooks/useHealthCheck";
 import { getActiveRole, isAuthenticated, useAuthStore } from "@/store/auth-store";
 import { BrutalButton } from "@/components/ui/BrutalButton";
 
-const NAV_LINK_CLS =
-  "inline-flex min-h-[44px] items-center gap-1.5 border-2 border-transparent px-3 py-2 text-sm font-bold tracking-tight text-ink hover:border-ink hover:bg-surface";
-const ACTIVE_NAV_CLS =
-  "border-ink bg-signal brutal-shadow-sm hover:bg-signal";
+const NAV_LINK_BASE_CLS =
+  "inline-flex min-h-[44px] items-center gap-1.5 border-2 px-3 py-2 text-sm font-bold tracking-tight text-ink";
+const INACTIVE_NAV_CLS = "border-transparent hover:border-ink hover:bg-surface";
+const ACTIVE_NAV_CLS = "border-ink bg-signal brutal-shadow-sm hover:bg-signal";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const health = useHealthCheck();
@@ -25,7 +25,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   function handleLogout() {
     auth.clearSession();
-    void queryClient.invalidateQueries();
+    queryClient.clear();
     toast.success("Signed out");
     if (pathname.startsWith("/orders") || pathname.startsWith("/organizer")) {
       void navigate({ to: "/" });
@@ -33,7 +33,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-canvas text-ink">
+    <div className="flex min-h-screen flex-col bg-canvas text-ink">
       <header className="border-b-3 border-ink bg-surface">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-3">
           <div className="flex flex-wrap items-center gap-4">
@@ -48,8 +48,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <nav className="flex flex-wrap items-center gap-1" aria-label="Main navigation">
               <Link
                 to="/"
-                className={NAV_LINK_CLS}
-                activeProps={{ className: `${NAV_LINK_CLS} ${ACTIVE_NAV_CLS}` }}
+                inactiveProps={{ className: `${NAV_LINK_BASE_CLS} ${INACTIVE_NAV_CLS}` }}
+                activeProps={{ className: `${NAV_LINK_BASE_CLS} ${ACTIVE_NAV_CLS}` }}
                 activeOptions={{ exact: true }}
               >
                 Events
@@ -57,8 +57,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               {role === "BUYER" && (
                 <Link
                   to="/orders"
-                  className={NAV_LINK_CLS}
-                  activeProps={{ className: `${NAV_LINK_CLS} ${ACTIVE_NAV_CLS}` }}
+                  inactiveProps={{ className: `${NAV_LINK_BASE_CLS} ${INACTIVE_NAV_CLS}` }}
+                  activeProps={{ className: `${NAV_LINK_BASE_CLS} ${ACTIVE_NAV_CLS}` }}
                 >
                   <ListBullets size={16} weight="bold" />
                   My Orders
@@ -67,8 +67,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               {role === "ORGANIZER" && (
                 <Link
                   to="/organizer"
-                  className={NAV_LINK_CLS}
-                  activeProps={{ className: `${NAV_LINK_CLS} ${ACTIVE_NAV_CLS}` }}
+                  inactiveProps={{ className: `${NAV_LINK_BASE_CLS} ${INACTIVE_NAV_CLS}` }}
+                  activeProps={{ className: `${NAV_LINK_BASE_CLS} ${ACTIVE_NAV_CLS}` }}
                 >
                   <PlusSquare size={16} weight="bold" />
                   Organizer
@@ -76,8 +76,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               )}
               <Link
                 to="/flash-sale"
-                className={NAV_LINK_CLS}
-                activeProps={{ className: `${NAV_LINK_CLS} ${ACTIVE_NAV_CLS}` }}
+                inactiveProps={{ className: `${NAV_LINK_BASE_CLS} ${INACTIVE_NAV_CLS}` }}
+                activeProps={{ className: `${NAV_LINK_BASE_CLS} ${ACTIVE_NAV_CLS}` }}
               >
                 <Lightning size={16} weight="bold" />
                 Flash Sale Lab
@@ -86,7 +86,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 href="/docs"
                 target="_blank"
                 rel="noreferrer"
-                className={NAV_LINK_CLS}
+                className={`${NAV_LINK_BASE_CLS} ${INACTIVE_NAV_CLS}`}
               >
                 API Docs
                 <ArrowSquareOut size={14} weight="bold" />
@@ -116,8 +116,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
             {authenticated && auth.user && role ? (
               <>
-                <span className="inline-flex min-h-[44px] max-w-[220px] items-center truncate border-2 border-ink bg-surface-muted px-3 py-1.5 font-mono text-xs font-bold">
-                  {auth.user.name} · {role}
+                <span className="inline-flex min-h-[44px] max-w-[220px] items-center gap-1.5 border-2 border-ink bg-surface-muted px-3 py-1.5 font-mono text-xs font-bold">
+                  <span className="max-w-[140px] truncate">{auth.user.name}</span>
+                  <span className="shrink-0">({role})</span>
                 </span>
                 <BrutalButton variant="secondary" onClick={handleLogout}>
                   <SignOut size={16} weight="bold" />
@@ -144,7 +145,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">{children}</main>
+
+      <footer className="mt-12 border-t-2 border-ink bg-surface py-4">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 font-mono text-xs text-ink-muted">
+          <span>TREEAN // FLASH TICKETING CONSOLE</span>
+          <span>SINGLE-ENTRY-POINT NGINX + GO 1.26 + POSTGRESQL 17 + REDIS 7</span>
+        </div>
+      </footer>
     </div>
   );
 }

@@ -1,8 +1,8 @@
 @import "tailwindcss";
-@import "@fontsource-variable/space-grotesk";
-@import "@fontsource/ibm-plex-mono/400.css";
-@import "@fontsource/ibm-plex-mono/500.css";
-@import "@fontsource/ibm-plex-mono/700.css";
+@import "@fontsource-variable/space-grotesk/wght.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+@import "@fontsource/ibm-plex-mono/latin-700.css";
 
 @theme inline {
   --font-sans: "Space Grotesk Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -42,6 +42,21 @@
     outline-offset: 2px;
     box-shadow: 0 0 0 6px var(--color-signal);
   }
+
+  a[href],
+  button:not(:disabled),
+  select:not(:disabled),
+  summary,
+  label[for] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
 }
 
 .brutal-shadow {
@@ -68,4 +83,13 @@
 .brutal-press:active:not(:disabled) {
   transform: translate(3px, 3px);
   box-shadow: 1px 1px 0 #111111;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brutal-press,
+  .brutal-press:hover:not(:disabled),
+  .brutal-press:active:not(:disabled) {
+    transition: none;
+    transform: none;
+  }
 }

@@ -81,7 +81,7 @@ export function OrderDetailCard({
               <h1 className="font-mono text-2xl font-bold">{order.invoice_number}</h1>
               <StatusBadge status={order.status} />
             </div>
-            <p className="mt-1 font-mono text-xs text-ink-muted">Order UUID: {order.id}</p>
+            <p className="mt-1 break-all font-mono text-xs text-ink-muted">Order UUID: {order.id}</p>
             <p className="font-mono text-xs text-ink-muted">Expires At: {formatDateTime(order.expires_at)}</p>
           </div>
 
@@ -100,7 +100,7 @@ export function OrderDetailCard({
 
         <div className="mt-4 space-y-2">
           {items.map((item) => (
-            <div key={item.id} className="flex items-center justify-between border-2 border-ink bg-canvas px-3 py-2 text-sm">
+            <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 border-2 border-ink bg-canvas px-3 py-2 text-sm">
               <span className="font-bold">
                 {item.ticket_type_name || item.ticket_type_id} x {item.quantity}
               </span>

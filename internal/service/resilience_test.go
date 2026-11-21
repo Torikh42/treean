@@ -136,6 +136,9 @@ func TestAuthService_LoginAccountRateLimitAndFailOpen(t *testing.T) {
 	if !ok || de.Code != domain.ErrCodeRateLimited || de.HTTPStatus != http.StatusTooManyRequests {
 		t.Fatalf("expected 429 RATE_LIMITED, got err=%v", err)
 	}
+	if de.RetryAfterSeconds != 15 {
+		t.Fatalf("RetryAfterSeconds = %d, want 15", de.RetryAfterSeconds)
+	}
 	if len(limiter.keys) != 1 || !strings.HasPrefix(limiter.keys[0], "rl:login:acct:203.0.113.10:") {
 		t.Fatalf("expected account bucket keyed by client IP + email hash, got %v", limiter.keys)
 	}

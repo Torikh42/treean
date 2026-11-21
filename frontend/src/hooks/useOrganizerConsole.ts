@@ -149,8 +149,12 @@ export function useOrganizerConsole() {
 
   function removeTier(index: number) {
     if (tiers.length <= MIN_EVENT_TIERS) return;
+    if ((tiers[index]?.sold_or_held ?? 0) > 0) return;
     setSubmitError(null);
-    setTiers((prev) => prev.filter((_, i) => i !== index));
+    setTiers((prev) => {
+      if (prev.length <= MIN_EVENT_TIERS || (prev[index]?.sold_or_held ?? 0) > 0) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
   }
 
   function handleSubmit() {

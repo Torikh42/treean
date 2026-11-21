@@ -133,7 +133,7 @@ func (s *EventService) ListOrganizerEvents(ctx context.Context, actor domain.Act
 	if err := requireOrganizerActor(actor, "only organizers can list their events"); err != nil {
 		return nil, err
 	}
-	if _, err := s.orders.ExpireDueOrders(ctx, nil, lazyExpiryBatchLimit, lazyExpiryActorType, time.Now().UTC()); err != nil {
+	if err := s.expireAndInvalidate(ctx, nil); err != nil {
 		return nil, err
 	}
 	return s.events.ListByOrganizer(ctx, actor.ID)
@@ -180,6 +180,9 @@ func (s *EventService) UpdateEvent(ctx context.Context, actor domain.Actor, even
 	ev, err := buildEventFromFields(eventID, actor.ID, in.Title, in.Description, in.Venue, in.EventDate, in.TicketTypes, false)
 	if err != nil {
 		return nil, err
+	}
+	if s.orders != nil {
+		_ = s.expireAndInvalidate(ctx, &eventID)
 	}
 	if err := s.events.UpdateWithTiers(ctx, actor.ID, ev); err != nil {
 		return nil, err
