@@ -47,25 +47,26 @@ if [ -n "$go_files" ] || [ -n "$go_mod_changed" ]; then
   go vet ./...
   go vet -tags=integration ./tests/...
 
-  # Same golangci-lint version + .golangci.yml as CI (.golangci-version is the single source of truth).
-  # Prefers a matching local binary, otherwise runs the official pinned Docker image so results match CI exactly.
+  # Same pinned golangci-lint version + .golangci.yml as CI (.golangci-version is the single source of truth).
+  # Pure native binary (no heavy Docker image), checking PATH and $(go env GOPATH)/bin.
   if [ "${SKIP_GOLANGCI_LINT:-0}" = "1" ]; then
     echo "pre-commit: SKIP_GOLANGCI_LINT=1 set, skipping golangci-lint (CI will still run it)."
   else
     lint_version=$(tr -d '[:space:]' < .golangci-version)
-    if command -v golangci-lint >/dev/null 2>&1 && golangci-lint --version 2>/dev/null | grep -q "${lint_version#v}"; then
-      echo "pre-commit: running golangci-lint ${lint_version} (local binary)..."
-      golangci-lint run ./...
-    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-      echo "pre-commit: running golangci-lint ${lint_version} (docker, same as CI)..."
-      repo_dir=$(pwd -W 2>/dev/null || pwd)
-      MSYS_NO_PATHCONV=1 docker run --rm \
-        -v "${repo_dir}:/app" -v golangci-lint-cache:/root/.cache \
-        -w /app "golangci/golangci-lint:${lint_version}" golangci-lint run
+    gopath_bin="$(go env GOPATH 2>/dev/null || true)/bin"
+    if [ -n "$gopath_bin" ] && [ -d "$gopath_bin" ]; then
+      PATH="$PATH:$gopath_bin"
+    fi
+    if command -v golangci-lint >/dev/null 2>&1; then
+      if golangci-lint --version 2>/dev/null | grep -q "${lint_version#v}"; then
+        echo "pre-commit: running golangci-lint ${lint_version}..."
+        golangci-lint run ./...
+      else
+        echo "pre-commit: local golangci-lint differs from ${lint_version}; run 'make install-lint' to match CI."
+        golangci-lint run ./...
+      fi
     else
-      echo "pre-commit: golangci-lint ${lint_version} is required to match CI but neither a matching binary nor Docker is available."
-      echo "pre-commit: install Docker or golangci-lint ${lint_version}, or bypass once with SKIP_GOLANGCI_LINT=1."
-      exit 1
+      echo "pre-commit: golangci-lint ${lint_version} not installed locally (skipping; run 'make install-lint' to enable local parity with CI)."
     fi
   fi
 fi
