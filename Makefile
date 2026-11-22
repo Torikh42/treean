@@ -1,4 +1,4 @@
-.PHONY: up down logs test test-integration lint fmt build hooks
+.PHONY: up down logs test test-integration lint install-lint fmt build hooks
 
 up:
 	docker compose up --build
@@ -16,7 +16,10 @@ test-integration:
 	go test -v -race -tags=integration ./tests/...
 
 lint:
-	docker run --rm -v "$(CURDIR):/app" -v golangci-lint-cache:/root/.cache -w /app golangci/golangci-lint:$(shell tr -d '[:space:]' < .golangci-version) golangci-lint run
+	golangci-lint run ./...
+
+install-lint:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(shell tr -d '[:space:]' < .golangci-version)
 
 fmt:
 	gofmt -s -w .
