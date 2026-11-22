@@ -75,6 +75,8 @@ func (w *ExpirySweeper) Start(ctx context.Context) {
 		return
 	}
 
+	w.RunOnce(ctx)
+
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 

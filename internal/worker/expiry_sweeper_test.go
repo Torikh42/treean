@@ -470,3 +470,34 @@ func TestExpirySweeper_DrainsMultipleFullBatchesInSingleTick(t *testing.T) {
 		t.Fatalf("logged expired_count = %d, want 24", rec.ExpiredCount)
 	}
 }
+
+func TestExpirySweeper_StartSweepsImmediatelyOnStartup(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	ran := make(chan struct{}, 1)
+	store := &mockExpiryStore{
+		hook: func(context.Context) {
+			select {
+			case ran <- struct{}{}:
+			default:
+			}
+			cancel()
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.NewExpirySweeper(store, nil, time.Hour, 10).Start(ctx)
+	}()
+
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected Start to execute an immediate initial sweep before first 1h tick")
+	}
+	<-done
+}
