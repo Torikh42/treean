@@ -248,3 +248,45 @@ func TestPoWVerifier_RejectsInsufficientLeadingZeros(t *testing.T) {
 		t.Fatalf("expected insufficient leading zeros error, got (%q, %v)", nonceKey, err)
 	}
 }
+
+func TestPoWVerifier_RejectsNonCanonicalHexCasing(t *testing.T) {
+	t.Parallel()
+
+	const difficulty = 8
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+
+	v, err := security.NewPoWVerifier("test-secret", difficulty, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("NewPoWVerifier: %v", err)
+	}
+
+	var challenge string
+	var parts []string
+	for range 10 {
+		challenge, err = v.Issue("203.0.113.10", now)
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		parts = strings.Split(challenge, ".")
+		if len(parts) == 5 && strings.ToUpper(parts[3]) != parts[3] && strings.ToUpper(parts[4]) != parts[4] {
+			break
+		}
+	}
+	if len(parts) != 5 || strings.ToUpper(parts[3]) == parts[3] || strings.ToUpper(parts[4]) == parts[4] {
+		t.Fatal("failed to generate challenge with hex letters in salt and mac")
+	}
+
+	// Mixed-case macHex must be rejected even when the PoW nonce is freshly solved for the uppercased token.
+	upperMACChallenge := strings.Join([]string{parts[0], parts[1], parts[2], parts[3], strings.ToUpper(parts[4])}, ".")
+	upperMACNonce := solveTestChallenge(t, upperMACChallenge, difficulty)
+	if nonceKey, err := v.Verify(upperMACChallenge+":"+upperMACNonce, "203.0.113.10", now); err == nil || nonceKey != "" {
+		t.Fatalf("expected non-canonical uppercase macHex to be rejected, got (%q, %v)", nonceKey, err)
+	}
+
+	// Mixed-case saltHex must also be rejected.
+	upperSaltChallenge := strings.Join([]string{parts[0], parts[1], parts[2], strings.ToUpper(parts[3]), parts[4]}, ".")
+	upperSaltNonce := solveTestChallenge(t, upperSaltChallenge, difficulty)
+	if nonceKey, err := v.Verify(upperSaltChallenge+":"+upperSaltNonce, "203.0.113.10", now); err == nil || nonceKey != "" {
+		t.Fatalf("expected non-canonical uppercase saltHex to be rejected, got (%q, %v)", nonceKey, err)
+	}
+}

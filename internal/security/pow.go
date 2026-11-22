@@ -112,17 +112,11 @@ func (v *PoWVerifier) Verify(solutionHeader string, clientIP string, now time.Ti
 	if err != nil || diff != v.difficulty {
 		return "", fmt.Errorf("%w: unexpected difficulty", ErrInvalidPoWChallenge)
 	}
-	if len(saltHex) != saltByteLen*2 {
-		return "", fmt.Errorf("%w: invalid salt length", ErrInvalidPoWChallenge)
-	}
-	if _, err := hex.DecodeString(saltHex); err != nil {
+	if _, err := decodeLowerHex(saltHex, saltByteLen); err != nil {
 		return "", fmt.Errorf("%w: invalid salt encoding", ErrInvalidPoWChallenge)
 	}
-	if len(macHex) != sha256.Size*2 {
-		return "", fmt.Errorf("%w: invalid mac length", ErrInvalidPoWChallenge)
-	}
-	gotMAC, err := hex.DecodeString(macHex)
-	if err != nil || len(gotMAC) != sha256.Size {
+	gotMAC, err := decodeLowerHex(macHex, sha256.Size)
+	if err != nil {
 		return "", fmt.Errorf("%w: invalid mac encoding", ErrInvalidPoWChallenge)
 	}
 
@@ -141,8 +135,29 @@ func (v *PoWVerifier) Verify(solutionHeader string, clientIP string, now time.Ti
 		return "", fmt.Errorf("%w: insufficient leading zero bits", ErrInvalidPoWSolution)
 	}
 
-	tokenDigest := sha256.Sum256([]byte(challengeToken))
-	return nonceKeyPrefix + hex.EncodeToString(tokenDigest[:]), nil
+	macDigest := sha256.Sum256(expectedMAC)
+	return nonceKeyPrefix + hex.EncodeToString(macDigest[:]), nil
+}
+
+func decodeLowerHex(raw string, expectedBytes int) ([]byte, error) {
+	if len(raw) != expectedBytes*2 || !isLowerHex(raw) {
+		return nil, ErrInvalidPoWChallenge
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil || len(decoded) != expectedBytes {
+		return nil, ErrInvalidPoWChallenge
+	}
+	return decoded, nil
+}
+
+func isLowerHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (v *PoWVerifier) computeMAC(expiresStr, diffStr, saltHex, clientIP string) []byte {
