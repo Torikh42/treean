@@ -212,7 +212,7 @@ func (m *memoryNonceStore) ConsumeOnce(_ context.Context, key string, _ time.Dur
 
 func solveChallengeForTest(t *testing.T, challenge string, difficulty int) string {
 	t.Helper()
-	for nonce := 0; nonce < 5_000_000; nonce++ {
+	for nonce := range 5_000_000 {
 		nonceStr := strconv.Itoa(nonce)
 		sum := sha256.Sum256([]byte(challenge + ":" + nonceStr))
 		if hasLeadingZeroBitsForTest(sum[:], difficulty) {
@@ -338,6 +338,25 @@ func TestHumaRateLimitMiddleware_OrderUserOnlyWhenIPMaxZero(t *testing.T) {
 	}
 }
 
+func assertChallenge403(t *testing.T, rec *httptest.ResponseRecorder, label string) string {
+	t.Helper()
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("%s status = %d, want 403 (body=%s)", label, rec.Code, rec.Body.String())
+	}
+	challenge := rec.Header().Get("X-PoW-Challenge")
+	if challenge == "" {
+		t.Fatalf("%s: expected non-empty X-PoW-Challenge header on 403 response", label)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("%s: decode 403 JSON: %v", label, err)
+	}
+	if body["error_code"] != domain.ErrCodeChallengeRequired {
+		t.Fatalf("%s: error_code = %v, want %s", label, body["error_code"], domain.ErrCodeChallengeRequired)
+	}
+	return challenge
+}
+
 func TestHumaRateLimitMiddleware_RegisterAdaptivePoW(t *testing.T) {
 	t.Parallel()
 
@@ -380,62 +399,33 @@ func TestHumaRateLimitMiddleware_RegisterAdaptivePoW(t *testing.T) {
 
 	// Requests 1..5 pass cleanly without PoW.
 	for i := range 5 {
-		rec := postReg("")
-		if rec.Code != http.StatusCreated {
+		if rec := postReg(""); rec.Code != http.StatusCreated {
 			t.Fatalf("request %d status = %d, want 201", i+1, rec.Code)
 		}
 	}
 
 	// Request 6 without X-PoW-Solution returns 403 CHALLENGE_REQUIRED with X-PoW-Challenge.
-	challengeRec := postReg("")
-	if challengeRec.Code != http.StatusForbidden {
-		t.Fatalf("request 6 status = %d, want 403 (body=%s)", challengeRec.Code, challengeRec.Body.String())
-	}
-	challenge := challengeRec.Header().Get("X-PoW-Challenge")
-	if challenge == "" {
-		t.Fatal("expected non-empty X-PoW-Challenge header on 403 response")
-	}
-	var challengeBody map[string]any
-	if err := json.Unmarshal(challengeRec.Body.Bytes(), &challengeBody); err != nil {
-		t.Fatalf("decode 403 JSON: %v", err)
-	}
-	if challengeBody["error_code"] != domain.ErrCodeChallengeRequired {
-		t.Fatalf("error_code = %v, want %s", challengeBody["error_code"], domain.ErrCodeChallengeRequired)
-	}
+	challenge := assertChallenge403(t, postReg(""), "request 6")
 
 	// Solving challenge lets request succeed (hard count = 7).
 	solved := solveChallengeForTest(t, challenge, difficulty)
-	okRec := postReg(solved)
-	if okRec.Code != http.StatusCreated {
+	if okRec := postReg(solved); okRec.Code != http.StatusCreated {
 		t.Fatalf("solved retry status = %d, want 201 (body=%s)", okRec.Code, okRec.Body.String())
 	}
 
 	// Replaying same X-PoW-Solution fails with 403 CHALLENGE_REQUIRED and fresh challenge (hard count = 8).
-	replayRec := postReg(solved)
-	if replayRec.Code != http.StatusForbidden {
-		t.Fatalf("replay status = %d, want 403", replayRec.Code)
-	}
-	freshChallenge := replayRec.Header().Get("X-PoW-Challenge")
-	if freshChallenge == "" || freshChallenge == challenge {
-		t.Fatalf("expected fresh X-PoW-Challenge on replay, got %q", freshChallenge)
-	}
-	var replayBody map[string]any
-	if err := json.Unmarshal(replayRec.Body.Bytes(), &replayBody); err != nil {
-		t.Fatalf("decode replay 403 JSON: %v", err)
-	}
-	if replayBody["error_code"] != domain.ErrCodeChallengeRequired {
-		t.Fatalf("replay error_code = %v, want %s", replayBody["error_code"], domain.ErrCodeChallengeRequired)
+	freshChallenge := assertChallenge403(t, postReg(solved), "replay")
+	if freshChallenge == challenge {
+		t.Fatalf("expected rotated X-PoW-Challenge on replay, got same %q", freshChallenge)
 	}
 
 	// Use remaining hard budget (9, 10) with fresh solved challenges, then 11th hits 429 even with valid PoW.
 	for i := 9; i <= 10; i++ {
-		c, err := pow.Issue("103.1.2.3", time.Now().UTC())
-		if err != nil {
-			t.Fatalf("Issue: %v", err)
+		c, issueErr := pow.Issue("103.1.2.3", time.Now().UTC())
+		if issueErr != nil {
+			t.Fatalf("Issue: %v", issueErr)
 		}
-		sol := solveChallengeForTest(t, c, difficulty)
-		rec := postReg(sol)
-		if rec.Code != http.StatusCreated {
+		if rec := postReg(solveChallengeForTest(t, c, difficulty)); rec.Code != http.StatusCreated {
 			t.Fatalf("request %d with valid PoW status = %d, want 201", i, rec.Code)
 		}
 	}

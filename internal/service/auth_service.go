@@ -252,14 +252,11 @@ func (s *AuthService) enforceLoginRateLimit(ctx context.Context, emailHash strin
 		return nil
 	}
 	allowed, retryAfter, err := s.limiter.Allow(ctx, loginAcctKeyPrefix+emailHash, s.loginAcctMax, time.Minute)
-	if err != nil {
-		// Fail open when limiter store errors so login continues uninterrupted.
-		return nil
+	if err == nil && !allowed {
+		return domain.NewRateLimitedError("too many login attempts; please wait and try again").WithRetryAfter(retryAfter)
 	}
-	if allowed {
-		return nil
-	}
-	return domain.NewRateLimitedError("too many login attempts; please wait and try again").WithRetryAfter(retryAfter)
+	// Fail open when limiter store errors so login continues uninterrupted.
+	return nil
 }
 
 func (s *AuthService) recordFailedLogin(ctx context.Context, emailHash string) {

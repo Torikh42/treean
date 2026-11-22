@@ -55,8 +55,8 @@ func TestMapServiceError_ChallengeRequired(t *testing.T) {
 
 	challengeErr := domain.NewChallengeRequiredError("proof-of-work verification required")
 	mapped := handler.MapServiceError(context.Background(), nil, challengeErr)
-	apiErr, ok := mapped.(*handler.APIError)
-	if !ok {
+	var apiErr *handler.APIError
+	if !errors.As(mapped, &apiErr) {
 		t.Fatalf("expected *handler.APIError, got %T", mapped)
 	}
 	if apiErr.GetStatus() != http.StatusForbidden || apiErr.Status != http.StatusForbidden {

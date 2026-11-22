@@ -24,6 +24,7 @@ const (
 )
 
 var (
+	// ErrInvalidPoWConfig indicates missing or out-of-range PoW verifier configuration.
 	ErrInvalidPoWConfig    = errors.New("invalid proof-of-work configuration")
 	ErrInvalidPoWChallenge = errors.New("invalid proof-of-work challenge")
 	ErrExpiredPoWChallenge = errors.New("expired proof-of-work challenge")
@@ -98,45 +99,51 @@ func (v *PoWVerifier) Verify(solutionHeader string, clientIP string, now time.Ti
 		return "", fmt.Errorf("%w: malformed solution header", ErrInvalidPoWSolution)
 	}
 
-	parts := strings.Split(challengeToken, ".")
-	if len(parts) != 5 || parts[0] != powVersion {
-		return "", fmt.Errorf("%w: malformed challenge token", ErrInvalidPoWChallenge)
-	}
-	expiresStr, diffStr, saltHex, macHex := parts[1], parts[2], parts[3], parts[4]
-
-	expiresUnix, err := strconv.ParseInt(expiresStr, 10, 64)
+	expectedMAC, err := v.parseAndVerifyChallengeToken(challengeToken, ip, normalizeUTC(now))
 	if err != nil {
-		return "", fmt.Errorf("%w: invalid expiry", ErrInvalidPoWChallenge)
-	}
-	diff, err := strconv.Atoi(diffStr)
-	if err != nil || diff != v.difficulty {
-		return "", fmt.Errorf("%w: unexpected difficulty", ErrInvalidPoWChallenge)
-	}
-	if _, err := decodeLowerHex(saltHex, saltByteLen); err != nil {
-		return "", fmt.Errorf("%w: invalid salt encoding", ErrInvalidPoWChallenge)
-	}
-	gotMAC, err := decodeLowerHex(macHex, sha256.Size)
-	if err != nil {
-		return "", fmt.Errorf("%w: invalid mac encoding", ErrInvalidPoWChallenge)
-	}
-
-	expectedMAC := v.computeMAC(expiresStr, diffStr, saltHex, ip)
-	if !hmac.Equal(gotMAC, expectedMAC) {
-		return "", fmt.Errorf("%w: mac verification failed", ErrInvalidPoWChallenge)
-	}
-
-	utcNow := normalizeUTC(now)
-	if expiresUnix < utcNow.Unix() {
-		return "", ErrExpiredPoWChallenge
+		return "", err
 	}
 
 	sum := sha256.Sum256([]byte(challengeToken + ":" + nonceStr))
-	if !hasLeadingZeroBits(sum[:], diff) {
+	if !hasLeadingZeroBits(sum[:], v.difficulty) {
 		return "", fmt.Errorf("%w: insufficient leading zero bits", ErrInvalidPoWSolution)
 	}
 
 	macDigest := sha256.Sum256(expectedMAC)
 	return nonceKeyPrefix + hex.EncodeToString(macDigest[:]), nil
+}
+
+func (v *PoWVerifier) parseAndVerifyChallengeToken(challengeToken, ip string, utcNow time.Time) ([]byte, error) {
+	parts := strings.Split(challengeToken, ".")
+	if len(parts) != 5 || parts[0] != powVersion {
+		return nil, fmt.Errorf("%w: malformed challenge token", ErrInvalidPoWChallenge)
+	}
+	expiresStr, diffStr, saltHex, macHex := parts[1], parts[2], parts[3], parts[4]
+
+	expiresUnix, err := strconv.ParseInt(expiresStr, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid expiry", ErrInvalidPoWChallenge)
+	}
+	diff, err := strconv.Atoi(diffStr)
+	if err != nil || diff != v.difficulty {
+		return nil, fmt.Errorf("%w: unexpected difficulty", ErrInvalidPoWChallenge)
+	}
+	if _, err := decodeLowerHex(saltHex, saltByteLen); err != nil {
+		return nil, fmt.Errorf("%w: invalid salt encoding", ErrInvalidPoWChallenge)
+	}
+	gotMAC, err := decodeLowerHex(macHex, sha256.Size)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid mac encoding", ErrInvalidPoWChallenge)
+	}
+
+	expectedMAC := v.computeMAC(expiresStr, diffStr, saltHex, ip)
+	if !hmac.Equal(gotMAC, expectedMAC) {
+		return nil, fmt.Errorf("%w: mac verification failed", ErrInvalidPoWChallenge)
+	}
+	if expiresUnix < utcNow.Unix() {
+		return nil, ErrExpiredPoWChallenge
+	}
+	return expectedMAC, nil
 }
 
 func decodeLowerHex(raw string, expectedBytes int) ([]byte, error) {
@@ -151,9 +158,9 @@ func decodeLowerHex(raw string, expectedBytes int) ([]byte, error) {
 }
 
 func isLowerHex(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

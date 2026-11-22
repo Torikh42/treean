@@ -410,28 +410,34 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 		t.Fatalf("failed to unmarshal log output: %v (output=%s)", err, rawOut)
 	}
 
-	if payload.Config.DatabaseURL != "[REDACTED]" {
-		t.Fatalf("logged database_url = %q, want [REDACTED]", payload.Config.DatabaseURL)
+	for _, check := range []struct {
+		name string
+		got  string
+	}{
+		{"database_url", payload.Config.DatabaseURL},
+		{"jwt_secret", payload.Config.JWTSecret},
+		{"webhook_secret", payload.Config.WebhookSecret},
+		{"pow_secret", payload.Config.PoWSecret},
+	} {
+		if check.got != "[REDACTED]" {
+			t.Fatalf("logged %s = %q, want [REDACTED]", check.name, check.got)
+		}
 	}
-	if payload.Config.JWTSecret != "[REDACTED]" {
-		t.Fatalf("logged jwt_secret = %q, want [REDACTED]", payload.Config.JWTSecret)
-	}
-	if payload.Config.WebhookSecret != "[REDACTED]" {
-		t.Fatalf("logged webhook_secret = %q, want [REDACTED]", payload.Config.WebhookSecret)
-	}
-	if payload.Config.PoWSecret != "[REDACTED]" {
-		t.Fatalf("logged pow_secret = %q, want [REDACTED]", payload.Config.PoWSecret)
-	}
-	if payload.Config.Port != "8080" || !payload.Config.AllowDemoHeaderAuth {
-		t.Fatalf("unexpected non-secret fields in log: %+v", payload.Config)
-	}
-	if payload.Config.ExpirySweepInterval != 5*time.Second ||
+	if payload.Config.Port != "8080" || !payload.Config.AllowDemoHeaderAuth ||
+		payload.Config.ExpirySweepInterval != 5*time.Second ||
 		payload.Config.HTTPReadTimeout != 15*time.Second ||
 		payload.Config.HTTPWriteTimeout != 30*time.Second ||
 		payload.Config.DBMaxConns != 50 ||
 		payload.Config.DBMinConns != 5 ||
 		payload.Config.CORSAllowedOriginsCount != 2 {
-		t.Fatalf("unexpected timing/pool/cors fields in log: %+v", payload.Config)
+		t.Fatalf("unexpected non-secret fields in log: %+v", payload.Config)
+	}
+}
+
+func assertIntField(t *testing.T, name string, got, want int) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("%s = %d, want %d", name, got, want)
 	}
 }
 
@@ -444,18 +450,10 @@ func TestLoad_CGNATRateLimitDefaultsAndOverrides(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cfg.RateLimitOrderIPMax != 0 {
-			t.Fatalf("RateLimitOrderIPMax = %d, want 0", cfg.RateLimitOrderIPMax)
-		}
-		if cfg.RateLimitRegisterHardMax != 100 {
-			t.Fatalf("RateLimitRegisterHardMax = %d, want 100", cfg.RateLimitRegisterHardMax)
-		}
-		if cfg.RateLimitLoginIPHardMax != 600 {
-			t.Fatalf("RateLimitLoginIPHardMax = %d, want 600", cfg.RateLimitLoginIPHardMax)
-		}
-		if cfg.PoWDifficulty != 16 {
-			t.Fatalf("PoWDifficulty = %d, want 16", cfg.PoWDifficulty)
-		}
+		assertIntField(t, "RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 0)
+		assertIntField(t, "RateLimitRegisterHardMax", cfg.RateLimitRegisterHardMax, 100)
+		assertIntField(t, "RateLimitLoginIPHardMax", cfg.RateLimitLoginIPHardMax, 600)
+		assertIntField(t, "PoWDifficulty", cfg.PoWDifficulty, 16)
 		if cfg.PoWSecret != testJWTSecret {
 			t.Fatalf("PoWSecret = %q, want fallback to JWTSecret %q", cfg.PoWSecret, testJWTSecret)
 		}
@@ -474,30 +472,18 @@ func TestLoad_CGNATRateLimitDefaultsAndOverrides(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cfg.RateLimitOrderIPMax != 0 {
-			t.Fatalf("RateLimitOrderIPMax = %d, want 0", cfg.RateLimitOrderIPMax)
-		}
-		if cfg.RateLimitRegisterHardMax != 150 {
-			t.Fatalf("RateLimitRegisterHardMax = %d, want 150", cfg.RateLimitRegisterHardMax)
-		}
-		if cfg.RateLimitLoginIPHardMax != 900 {
-			t.Fatalf("RateLimitLoginIPHardMax = %d, want 900", cfg.RateLimitLoginIPHardMax)
-		}
-		if cfg.PoWDifficulty != 20 {
-			t.Fatalf("PoWDifficulty = %d, want 20", cfg.PoWDifficulty)
-		}
+		assertIntField(t, "RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 0)
+		assertIntField(t, "RateLimitRegisterHardMax", cfg.RateLimitRegisterHardMax, 150)
+		assertIntField(t, "RateLimitLoginIPHardMax", cfg.RateLimitLoginIPHardMax, 900)
+		assertIntField(t, "PoWDifficulty", cfg.PoWDifficulty, 20)
 		if cfg.PoWSecret != "custom-pow-secret" {
 			t.Fatalf("PoWSecret = %q, want custom-pow-secret", cfg.PoWSecret)
 		}
 
 		var buf bytes.Buffer
-		logger := slog.New(slog.NewJSONHandler(&buf, nil))
-		logger.Info("config loaded", slog.Any("config", cfg))
-		if strings.Contains(buf.String(), "custom-pow-secret") {
-			t.Fatalf("LogValue leaked PoWSecret: %s", buf.String())
-		}
-		if !strings.Contains(buf.String(), `"pow_secret":"[REDACTED]"`) {
-			t.Fatalf("LogValue missing redacted pow_secret: %s", buf.String())
+		slog.New(slog.NewJSONHandler(&buf, nil)).Info("config loaded", slog.Any("config", cfg))
+		if strings.Contains(buf.String(), "custom-pow-secret") || !strings.Contains(buf.String(), `"pow_secret":"[REDACTED]"`) {
+			t.Fatalf("LogValue PoWSecret redaction mismatch: %s", buf.String())
 		}
 	})
 

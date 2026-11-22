@@ -221,46 +221,40 @@ func TestClient_LiveRedisConsumeOnce(t *testing.T) {
 	}
 }
 
+func assertLivePeekState(t *testing.T, c *Client, key string, limit int, wantAllowed bool) {
+	t.Helper()
+	allowed, retryAfter, err := c.Peek(t.Context(), key, limit)
+	if err != nil || allowed != wantAllowed || (wantAllowed && retryAfter != 0) || (!wantAllowed && retryAfter < time.Second) {
+		t.Fatalf("Peek(%q) = (%v, %v, %v), wantAllowed=%v", key, allowed, retryAfter, err, wantAllowed)
+	}
+}
+
+func assertLiveAllowOK(t *testing.T, c *Client, key string, limit int) {
+	t.Helper()
+	allowed, retryAfter, err := c.Allow(t.Context(), key, limit, 10*time.Second)
+	if err != nil || !allowed || retryAfter != 0 {
+		t.Fatalf("Allow(%q) = (%v, %v, %v), want allowed", key, allowed, retryAfter, err)
+	}
+}
+
 func TestClient_LiveRedisPeekAndReset(t *testing.T) {
 	ctx := t.Context()
 	c := openLiveTestRedisClient(t)
 
 	rlKey := "rl:live:peek:" + uuid.NewString()
-	allowed, retryAfter, err := c.Peek(ctx, rlKey, 2)
-	if err != nil || !allowed || retryAfter != 0 {
-		t.Fatalf("initial Peek = (%v, %v, %v), want (true, 0, nil)", allowed, retryAfter, err)
+	assertLivePeekState(t, c, rlKey, 2, true)
+	for range 2 {
+		assertLiveAllowOK(t, c, rlKey, 2)
 	}
-
-	for i := range 2 {
-		allowed, retryAfter, err = c.Allow(ctx, rlKey, 2, 10*time.Second)
-		if err != nil || !allowed || retryAfter != 0 {
-			t.Fatalf("Allow %d = (%v, %v, %v), want allowed", i+1, allowed, retryAfter, err)
-		}
+	for range 2 {
+		assertLivePeekState(t, c, rlKey, 2, false)
 	}
-
-	for i := range 2 {
-		allowed, retryAfter, err = c.Peek(ctx, rlKey, 2)
-		if err != nil || allowed || retryAfter < time.Second {
-			t.Fatalf("Peek %d at limit = (%v, %v, %v), want (false, >=1s, nil)", i+1, allowed, retryAfter, err)
-		}
-	}
-
-	count, err := c.rdb.Get(ctx, rlKey).Int()
-	if err != nil || count != 2 {
+	if count, err := c.rdb.Get(ctx, rlKey).Int(); err != nil || count != 2 {
 		t.Fatalf("counter after Peek = (%d, %v), want (2, nil)", count, err)
 	}
-
 	if err := c.Reset(ctx, rlKey); err != nil {
 		t.Fatalf("Reset = %v, want nil", err)
 	}
-
-	allowed, retryAfter, err = c.Peek(ctx, rlKey, 2)
-	if err != nil || !allowed || retryAfter != 0 {
-		t.Fatalf("Peek after Reset = (%v, %v, %v), want (true, 0, nil)", allowed, retryAfter, err)
-	}
-
-	allowed, retryAfter, err = c.Allow(ctx, rlKey, 2, 10*time.Second)
-	if err != nil || !allowed || retryAfter != 0 {
-		t.Fatalf("Allow after Reset = (%v, %v, %v), want allowed", allowed, retryAfter, err)
-	}
+	assertLivePeekState(t, c, rlKey, 2, true)
+	assertLiveAllowOK(t, c, rlKey, 2)
 }

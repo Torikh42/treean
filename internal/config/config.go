@@ -171,6 +171,24 @@ func loadRedisAndRateLimitConfig(cfg *Config) error {
 	if cfg.RateLimitEnabled, err = parseBool("RATE_LIMIT_ENABLED", true); err != nil {
 		return err
 	}
+	if err = loadRateLimitThresholds(cfg); err != nil {
+		return err
+	}
+	if cfg.PoWDifficulty, err = parsePositiveInt("POW_DIFFICULTY", defaultPoWDifficulty); err != nil {
+		return err
+	}
+	if cfg.PoWDifficulty < minPoWDifficulty || cfg.PoWDifficulty > maxPoWDifficulty {
+		return fmt.Errorf("invalid POW_DIFFICULTY (%d): must be between %d and %d", cfg.PoWDifficulty, minPoWDifficulty, maxPoWDifficulty)
+	}
+	cfg.PoWSecret = strings.TrimSpace(os.Getenv("POW_SECRET"))
+	if cfg.PoWSecret == "" {
+		cfg.PoWSecret = cfg.JWTSecret
+	}
+	return nil
+}
+
+func loadRateLimitThresholds(cfg *Config) error {
+	var err error
 	if cfg.RateLimitRegisterMax, err = parsePositiveInt("RATE_LIMIT_REGISTER_MAX", defaultRateLimitRegMax); err != nil {
 		return err
 	}
@@ -200,16 +218,6 @@ func loadRedisAndRateLimitConfig(cfg *Config) error {
 	}
 	if cfg.RateLimitDemoFlashSaleMax, err = parsePositiveInt("RATE_LIMIT_DEMO_FLASH_SALE_MAX", defaultRateLimitDemoMax); err != nil {
 		return err
-	}
-	if cfg.PoWDifficulty, err = parsePositiveInt("POW_DIFFICULTY", defaultPoWDifficulty); err != nil {
-		return err
-	}
-	if cfg.PoWDifficulty < minPoWDifficulty || cfg.PoWDifficulty > maxPoWDifficulty {
-		return fmt.Errorf("invalid POW_DIFFICULTY (%d): must be between %d and %d", cfg.PoWDifficulty, minPoWDifficulty, maxPoWDifficulty)
-	}
-	cfg.PoWSecret = strings.TrimSpace(os.Getenv("POW_SECRET"))
-	if cfg.PoWSecret == "" {
-		cfg.PoWSecret = cfg.JWTSecret
 	}
 	return nil
 }

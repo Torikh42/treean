@@ -13,7 +13,7 @@ import (
 
 func solveTestChallenge(t *testing.T, challenge string, difficulty int) string {
 	t.Helper()
-	for i := 0; i < 10_000_000; i++ {
+	for i := range 10_000_000 {
 		nonce := fmt.Sprintf("%x", i)
 		sum := sha256.Sum256([]byte(challenge + ":" + nonce))
 		if digestHasLeadingZeroBits(sum[:], difficulty) {
