@@ -2,6 +2,8 @@ package service_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 	"github.com/torikh42/treean/internal/middleware"
 	"github.com/torikh42/treean/internal/repository"
 	"github.com/torikh42/treean/internal/service"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type stubRateLimiter struct {
@@ -139,8 +142,8 @@ func TestAuthService_LoginAccountRateLimitAndFailOpen(t *testing.T) {
 	if de.RetryAfterSeconds != 15 {
 		t.Fatalf("RetryAfterSeconds = %d, want 15", de.RetryAfterSeconds)
 	}
-	if len(limiter.keys) != 1 || !strings.HasPrefix(limiter.keys[0], "rl:login:acct:203.0.113.10:") {
-		t.Fatalf("expected account bucket keyed by client IP + email hash, got %v", limiter.keys)
+	if len(limiter.keys) != 1 || !strings.HasPrefix(limiter.keys[0], "rl:login:acct:") || strings.Contains(limiter.keys[0], "203.0.113.10") {
+		t.Fatalf("expected account bucket keyed only by email hash, got %v", limiter.keys)
 	}
 
 	failOpenSvc := service.NewAuthService(newMockUserRepo(), "jwt-secret").
@@ -149,6 +152,236 @@ func TestAuthService_LoginAccountRateLimitAndFailOpen(t *testing.T) {
 	de2, ok2 := errors.AsType[*domain.DomainError](err)
 	if !ok2 || de2.Code != domain.ErrCodeInvalidCredentials {
 		t.Fatalf("expected fail-open credential check (INVALID_CREDENTIALS), got err=%v", err)
+	}
+}
+
+type memoryStatefulRateLimiter struct {
+	mu       sync.Mutex
+	counts   map[string]int
+	resets   []string
+	peekErr  error
+	resetErr error
+}
+
+func newMemoryStatefulRateLimiter() *memoryStatefulRateLimiter {
+	return &memoryStatefulRateLimiter{counts: make(map[string]int)}
+}
+
+func (m *memoryStatefulRateLimiter) Allow(_ context.Context, key string, limit int, window time.Duration) (bool, time.Duration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counts[key]++
+	if m.counts[key] > limit {
+		return false, window, nil
+	}
+	return true, 0, nil
+}
+
+func (m *memoryStatefulRateLimiter) Peek(_ context.Context, key string, limit int) (bool, time.Duration, error) {
+	if m.peekErr != nil {
+		return false, 0, m.peekErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.counts[key] >= limit {
+		return false, 15 * time.Minute, nil
+	}
+	return true, 0, nil
+}
+
+func (m *memoryStatefulRateLimiter) Reset(_ context.Context, key string) error {
+	if m.resetErr != nil {
+		return m.resetErr
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.counts, key)
+	m.resets = append(m.resets, key)
+	return nil
+}
+
+type countingUserRepo struct {
+	*mockUserRepo
+	findCalls int
+}
+
+func (c *countingUserRepo) FindByEmail(ctx context.Context, email string) (*domain.User, error) {
+	c.findCalls++
+	return c.mockUserRepo.FindByEmail(ctx, email)
+}
+
+func emailHashForTest(email string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return hex.EncodeToString(sum[:8])
+}
+
+func captureClientIPContext(t *testing.T, remoteAddr string) context.Context {
+	t.Helper()
+	ctxCh := make(chan context.Context, 1)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/auth/login", nil)
+	req.RemoteAddr = remoteAddr
+	middleware.WithClientIP(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		ctxCh <- r.Context()
+	})).ServeHTTP(httptest.NewRecorder(), req)
+	return <-ctxCh
+}
+
+func TestAuthService_LoginRateLimitIsolatesDistinctEmailsOnSameIP(t *testing.T) {
+	t.Parallel()
+
+	repo := newMockUserRepo()
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-pass"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	for _, email := range []string{"victim@event.local", "neighbor@event.local"} {
+		if createErr := repo.Create(t.Context(), &domain.User{
+			ID:           uuid.New(),
+			Email:        email,
+			Name:         "Test User",
+			PasswordHash: string(hash),
+			Role:         domain.RoleBuyer,
+		}); createErr != nil {
+			t.Fatalf("seed user %s: %v", email, createErr)
+		}
+	}
+
+	limiter := newMemoryStatefulRateLimiter()
+	svc := service.NewAuthService(repo, "jwt-secret").WithLoginRateLimiter(limiter, 2)
+	sharedIPCtx := captureClientIPContext(t, "103.1.2.3:4567")
+
+	// Burn victim@event.local account limit on shared CG-NAT IP.
+	for range 2 {
+		if _, loginErr := svc.Login(sharedIPCtx, "victim@event.local", "correct-pass"); loginErr != nil {
+			t.Fatalf("victim initial login failed: %v", loginErr)
+		}
+	}
+	_, victimErr := svc.Login(sharedIPCtx, "victim@event.local", "correct-pass")
+	de, ok := errors.AsType[*domain.DomainError](victimErr)
+	if !ok || de.Code != domain.ErrCodeRateLimited || de.HTTPStatus != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 RATE_LIMITED for victim@event.local, got %v", victimErr)
+	}
+
+	// Neighbor sharing the exact same IP 103.1.2.3 still succeeds cleanly.
+	res, neighborErr := svc.Login(sharedIPCtx, "neighbor@event.local", "correct-pass")
+	if neighborErr != nil || res == nil || res.AccessToken == "" {
+		t.Fatalf("neighbor@event.local on same IP failed: res=%v err=%v", res, neighborErr)
+	}
+}
+
+func mustLoginDomainErr(ctx context.Context, t *testing.T, svc *service.AuthService, email, pass, wantCode string) {
+	t.Helper()
+	_, err := svc.Login(ctx, email, pass)
+	de, ok := errors.AsType[*domain.DomainError](err)
+	if !ok || de.Code != wantCode {
+		t.Fatalf("Login(%q) got err=%v, want code %s", email, err, wantCode)
+	}
+}
+
+func mustLoginOK(ctx context.Context, t *testing.T, svc *service.AuthService, email, pass string) {
+	t.Helper()
+	res, err := svc.Login(ctx, email, pass)
+	if err != nil || res == nil || res.AccessToken == "" {
+		t.Fatalf("Login(%q) expected success, got res=%v err=%v", email, res, err)
+	}
+}
+
+func TestAuthService_LoginFailedLockoutResetsOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	baseRepo := newMockUserRepo()
+	hash, err := bcrypt.GenerateFromPassword([]byte("right-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	const targetEmail = "lockout@event.local"
+	if createErr := baseRepo.Create(t.Context(), &domain.User{
+		ID: uuid.New(), Email: targetEmail, Name: "Lockout User", PasswordHash: string(hash), Role: domain.RoleBuyer,
+	}); createErr != nil {
+		t.Fatalf("seed user: %v", createErr)
+	}
+
+	repo := &countingUserRepo{mockUserRepo: baseRepo}
+	limiter := newMemoryStatefulRateLimiter()
+	svc := service.NewAuthService(repo, "jwt-secret").WithLoginRateLimiter(limiter, 20)
+	ctx := captureClientIPContext(t, "103.1.2.3:9999")
+	failKey := "rl:login:fail:103.1.2.3:" + emailHashForTest(targetEmail)
+
+	for range 4 {
+		mustLoginDomainErr(ctx, t, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
+	}
+	if limiter.counts[failKey] != 4 {
+		t.Fatalf("fail count = %d, want 4", limiter.counts[failKey])
+	}
+	mustLoginOK(ctx, t, svc, targetEmail, "right-password")
+	if limiter.counts[failKey] != 0 || len(limiter.resets) != 1 || limiter.resets[0] != failKey {
+		t.Fatalf("expected Reset(%q) on success, counts=%v resets=%v", failKey, limiter.counts, limiter.resets)
+	}
+
+	for range 5 {
+		mustLoginDomainErr(ctx, t, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
+	}
+	callsBeforeLockout := repo.findCalls
+	mustLoginDomainErr(ctx, t, svc, targetEmail, "right-password", domain.ErrCodeRateLimited)
+	if repo.findCalls != callsBeforeLockout {
+		t.Fatalf("FindByEmail called %d times on locked account (before=%d)", repo.findCalls, callsBeforeLockout)
+	}
+
+	limiter.peekErr = errors.New("redis timeout")
+	mustLoginOK(ctx, t, svc, targetEmail, "right-password")
+}
+
+func TestAuthService_LoginFailedLockoutIsolatedPerIPAndEmail_AndMissingUserTimingParity(t *testing.T) {
+	t.Parallel()
+
+	repo := newMockUserRepo()
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-pass"), 10)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	const (
+		targetEmail   = "organizer@event.local"
+		neighborEmail = "neighbor@event.local"
+		demoEmail     = "demo-nopass@event.local"
+	)
+	for _, u := range []*domain.User{
+		{ID: uuid.New(), Email: targetEmail, Name: "Organizer", PasswordHash: string(hash), Role: domain.RoleOrganizer},
+		{ID: uuid.New(), Email: neighborEmail, Name: "Neighbor", PasswordHash: string(hash), Role: domain.RoleBuyer},
+		{ID: uuid.New(), Email: demoEmail, Name: "Demo NoPass", PasswordHash: "", Role: domain.RoleBuyer},
+	} {
+		if createErr := repo.Create(t.Context(), u); createErr != nil {
+			t.Fatalf("seed user %s: %v", u.Email, createErr)
+		}
+	}
+
+	limiter := newMemoryStatefulRateLimiter()
+	svc := service.NewAuthService(repo, "jwt-secret").WithLoginRateLimiter(limiter, 50)
+	attackerCtx := captureClientIPContext(t, "198.51.100.9:1111")
+	legitOtherIPCtx := captureClientIPContext(t, "203.0.113.42:2222")
+
+	for range 5 {
+		mustLoginDomainErr(attackerCtx, t, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
+	}
+	mustLoginDomainErr(attackerCtx, t, svc, targetEmail, "correct-pass", domain.ErrCodeRateLimited)
+	mustLoginOK(legitOtherIPCtx, t, svc, targetEmail, "correct-pass")
+	mustLoginOK(attackerCtx, t, svc, neighborEmail, "correct-pass")
+
+	for _, tc := range []struct {
+		name  string
+		email string
+	}{
+		{name: "missing_email", email: "does-not-exist@event.local"},
+		{name: "empty_password_hash", email: demoEmail},
+	} {
+		start := time.Now()
+		mustLoginDomainErr(t.Context(), t, svc, tc.email, "any-password", domain.ErrCodeInvalidCredentials)
+		if elapsed := time.Since(start); elapsed < 5*time.Millisecond {
+			t.Fatalf("%s: expected cost-10 dummy bcrypt parity latency (>=5ms), got %v", tc.name, elapsed)
+		}
+		unknownFailKey := "rl:login:fail:unknown:" + emailHashForTest(tc.email)
+		if limiter.counts[unknownFailKey] != 1 {
+			t.Fatalf("%s: fail counter[%q] = %d, want 1", tc.name, unknownFailKey, limiter.counts[unknownFailKey])
+		}
 	}
 }
 

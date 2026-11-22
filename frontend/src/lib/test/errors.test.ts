@@ -116,4 +116,42 @@ describe("parseApiError", () => {
     expect(parsed.code).toBe("RATE_LIMITED");
     expect(parsed.actionHint).toContain("wait");
   });
+
+  it("maps CHALLENGE_REQUIRED (403) with verification guidance", () => {
+    const parsed = parseApiError({
+      title: "Forbidden",
+      status: 403,
+      detail: "proof-of-work verification required for shared network",
+      error_code: "CHALLENGE_REQUIRED",
+    });
+    expect(parsed.status).toBe(403);
+    expect(parsed.code).toBe("CHALLENGE_REQUIRED");
+    expect(parsed.userTitle).toBe("Verification required");
+    expect(parsed.userMessage).toContain("Shared network verification timed out");
+    expect(parsed.actionHint.toLowerCase()).toContain("try again");
+  });
+
+  it("surfaces client-side PoW solver failures with HTTPS/Web Crypto guidance", () => {
+    const detail = "Web Crypto crypto.subtle is unavailable in this context; HTTPS or a supported browser is required.";
+    const parsed = parseApiError({
+      title: "Forbidden",
+      status: 403,
+      detail,
+      error_code: "CHALLENGE_REQUIRED",
+    });
+    expect(parsed.status).toBe(403);
+    expect(parsed.code).toBe("CHALLENGE_REQUIRED");
+    expect(parsed.userTitle).toBe("Verification required");
+    expect(parsed.userMessage).toBe(detail);
+    expect(parsed.actionHint).toBe("Use HTTPS or a supported browser with Web Crypto enabled, then submit again.");
+
+    const exhausted = parseApiError({
+      title: "Forbidden",
+      status: 403,
+      detail: "PoW challenge solver exceeded max iterations (2000000)",
+      error_code: "CHALLENGE_REQUIRED",
+    });
+    expect(exhausted.userMessage).toContain("max iterations");
+    expect(exhausted.actionHint).toContain("Web Crypto");
+  });
 });

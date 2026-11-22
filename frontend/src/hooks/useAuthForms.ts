@@ -7,11 +7,76 @@ import { z } from "zod";
 import { toastApiError, type ParsedApiError } from "@/lib/api/errors";
 import {
   getMeQueryKey,
-  loginUserMutation,
-  registerUserMutation,
 } from "@/lib/api/generated/@tanstack/react-query.gen";
+import { loginUser, registerUser } from "@/lib/api/generated/sdk.gen";
+import type {
+  AuthResult,
+  LoginBodyWritable,
+  LoginUserError,
+  RegisterBodyWritable,
+  RegisterUserError,
+} from "@/lib/api/generated/types.gen";
 import { resolvePostAuthRedirect } from "@/lib/auth-guards";
+import { solvePowChallenge } from "@/lib/pow";
 import { useAuthStore, type UserRole } from "@/store/auth-store";
+
+const POW_CHALLENGE_HEADER = "X-PoW-Challenge";
+const POW_SOLUTION_HEADER = "X-PoW-Solution";
+
+export type AuthAttemptResult<TData, TError> = (
+  | { data: TData; error: undefined }
+  | { data: undefined; error: TError }
+) & {
+  response?: Response;
+};
+
+function isChallengeRequired(error: unknown, response?: Response): boolean {
+  if (response?.status !== 403) return false;
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { error_code?: unknown };
+  return candidate.error_code === "CHALLENGE_REQUIRED";
+}
+
+/**
+ * Executes an auth request and transparently solves one adaptive PoW challenge
+ * when the backend returns HTTP 403 `CHALLENGE_REQUIRED` with `X-PoW-Challenge`.
+ */
+export async function executeAuthWithPowRetry<TData, TError>(
+  callAuth: (headers?: Record<string, string>) => Promise<AuthAttemptResult<TData, TError>>,
+): Promise<TData> {
+  const firstResult = await callAuth();
+  if (firstResult.error === undefined && firstResult.data !== undefined) {
+    return firstResult.data;
+  }
+
+  const firstError = firstResult.error;
+  if (!isChallengeRequired(firstError, firstResult.response)) {
+    throw firstError;
+  }
+
+  const challengeToken = firstResult.response?.headers.get(POW_CHALLENGE_HEADER)?.trim();
+  if (!challengeToken) {
+    throw firstError;
+  }
+
+  let solution: string;
+  try {
+    solution = await solvePowChallenge(challengeToken);
+  } catch (solveErr) {
+    if (firstError && typeof firstError === "object" && solveErr instanceof Error) {
+      throw { ...firstError, detail: solveErr.message };
+    }
+    throw firstError;
+  }
+
+  const retryResult = await callAuth({
+    [POW_SOLUTION_HEADER]: solution,
+  });
+  if (retryResult.error === undefined && retryResult.data !== undefined) {
+    return retryResult.data;
+  }
+  throw retryResult.error;
+}
 
 const loginSchema = z.object({
   email: z.string().trim().email("Enter a valid email address"),
@@ -45,8 +110,15 @@ export function useLoginForm(redirectPath?: string) {
   const setJwtSession = useAuthStore((s) => s.setJwtSession);
   const [submitError, setSubmitError] = useState<ParsedApiError | null>(null);
 
-  const loginMut = useMutation({
-    ...loginUserMutation(),
+  const loginMut = useMutation<AuthResult, LoginUserError, { body: LoginBodyWritable }>({
+    mutationFn: ({ body }) =>
+      executeAuthWithPowRetry<AuthResult, LoginUserError>((headers) =>
+        loginUser({
+          body,
+          headers,
+          throwOnError: false,
+        }),
+      ),
     onSuccess: (data) => {
       setSubmitError(null);
       const role = normalizeUserRole(data.user.role);
@@ -98,8 +170,15 @@ export function useRegisterForm(redirectPath?: string) {
   const setJwtSession = useAuthStore((s) => s.setJwtSession);
   const [submitError, setSubmitError] = useState<ParsedApiError | null>(null);
 
-  const registerMut = useMutation({
-    ...registerUserMutation(),
+  const registerMut = useMutation<AuthResult, RegisterUserError, { body: RegisterBodyWritable }>({
+    mutationFn: ({ body }) =>
+      executeAuthWithPowRetry<AuthResult, RegisterUserError>((headers) =>
+        registerUser({
+          body,
+          headers,
+          throwOnError: false,
+        }),
+      ),
     onSuccess: (data) => {
       setSubmitError(null);
       const role = normalizeUserRole(data.user.role);

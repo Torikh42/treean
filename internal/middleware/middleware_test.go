@@ -685,11 +685,11 @@ func TestCORS_HandlesOptionsPreflight(t *testing.T) {
 			if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, DELETE, OPTIONS" {
 				t.Fatalf("Access-Control-Allow-Methods = %q, want %q", got, "GET, POST, PUT, DELETE, OPTIONS")
 			}
-			if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key" {
-				t.Fatalf("Access-Control-Allow-Headers = %q, want %q", got, "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key")
+			if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key, X-PoW-Solution" {
+				t.Fatalf("Access-Control-Allow-Headers = %q, want %q", got, "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key, X-PoW-Solution")
 			}
-			if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "Idempotent-Replay, Retry-After" {
-				t.Fatalf("Access-Control-Expose-Headers = %q, want %q", got, "Idempotent-Replay, Retry-After")
+			if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "Idempotent-Replay, Retry-After, X-PoW-Challenge" {
+				t.Fatalf("Access-Control-Expose-Headers = %q, want %q", got, "Idempotent-Replay, Retry-After, X-PoW-Challenge")
 			}
 			if got := rec.Header().Get("Access-Control-Max-Age"); got != "600" {
 				t.Fatalf("Access-Control-Max-Age = %q, want 600", got)

@@ -80,6 +80,16 @@ type RateLimiter interface {
 	Allow(ctx context.Context, key string, limit int, window time.Duration) (allowed bool, retryAfter time.Duration, err error)
 }
 
+// RateLimitPeeker reads a fixed-window counter without incrementing it.
+type RateLimitPeeker interface {
+	Peek(ctx context.Context, key string, limit int) (allowed bool, retryAfter time.Duration, err error)
+}
+
+// RateLimitResetter deletes a rate-limit counter key best-effort.
+type RateLimitResetter interface {
+	Reset(ctx context.Context, key string) error
+}
+
 func validateServiceCall(ctx context.Context, op string, ready bool) error {
 	if !ready {
 		return errors.New(op + ": service or repository is nil")

@@ -28,9 +28,25 @@ const (
 	maxBcryptPasswordBytes = 72
 	maxEmailLength         = 254
 	jwtTokenTTL            = 24 * time.Hour
+	loginFailMax           = 5
+	loginFailWindow        = 15 * time.Minute
+	loginAcctKeyPrefix     = "rl:login:acct:"
+	loginFailKeyPrefix     = "rl:login:fail:"
+	unknownLoginClientIP   = "unknown"
 	errMsgInvalidCreds     = "invalid email or password"
 	errMsgInvalidAuth      = "invalid or expired token"
 )
+
+var dummyBcryptHash = mustDummyBcryptHash()
+
+func mustDummyBcryptHash() []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-parity-password"), bcryptCost)
+	if err != nil {
+		// Static valid cost-10 fallback if random entropy is unavailable at init.
+		return []byte("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy")
+	}
+	return hash
+}
 
 // AuthService manages registration, login, and JWT issuance/verification.
 type AuthService struct {
@@ -48,7 +64,7 @@ func NewAuthService(users UserRepository, jwtSecret string) *AuthService {
 	}
 }
 
-// WithLoginRateLimiter enables fail-open per-(IP+email) throttling before bcrypt runs.
+// WithLoginRateLimiter enables fail-open email-keyed throttling and failed-attempt lockout before bcrypt runs.
 func (s *AuthService) WithLoginRateLimiter(limiter RateLimiter, maxPerMinute int) *AuthService {
 	if s != nil {
 		s.limiter = limiter
@@ -121,17 +137,30 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthR
 	if normalizedEmail == "" || strings.TrimSpace(password) == "" {
 		return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeInvalidCredentials, errMsgInvalidCreds)
 	}
-	if err := s.enforceLoginRateLimit(ctx, normalizedEmail); err != nil {
+	emailHash := loginEmailHash(normalizedEmail)
+	if err := s.enforceLoginRateLimit(ctx, emailHash); err != nil {
 		return nil, err
 	}
 
 	u, err := s.users.FindByEmail(ctx, normalizedEmail)
 	if err != nil {
+		if de, ok := errors.AsType[*domain.DomainError](err); ok && de.Code == domain.ErrCodeInvalidCredentials {
+			_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
+			s.recordFailedLogin(ctx, emailHash)
+			return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeInvalidCredentials, errMsgInvalidCreds)
+		}
 		return nil, err
 	}
-	if u == nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+	if u == nil || u.PasswordHash == "" {
+		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
+		s.recordFailedLogin(ctx, emailHash)
 		return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeInvalidCredentials, errMsgInvalidCreds)
 	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+		s.recordFailedLogin(ctx, emailHash)
+		return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeInvalidCredentials, errMsgInvalidCreds)
+	}
+	s.resetFailedLogin(ctx, emailHash)
 
 	tok, err := s.signJWT(u)
 	if err != nil {
@@ -196,25 +225,55 @@ func (s *AuthService) hasJWTSecret() bool {
 	return s != nil && len(bytes.TrimSpace(s.jwtSecret)) > 0
 }
 
-func (s *AuthService) enforceLoginRateLimit(ctx context.Context, normalizedEmail string) error {
-	if s.limiter == nil || s.loginAcctMax <= 0 {
-		return nil
-	}
-	ip := middleware.ClientIPFromContext(ctx)
-	if ip == "" {
-		ip = "unknown"
-	}
+func loginEmailHash(normalizedEmail string) string {
 	sum := sha256.Sum256([]byte(normalizedEmail))
-	key := "rl:login:acct:" + ip + ":" + hex.EncodeToString(sum[:8])
-	allowed, retryAfter, err := s.limiter.Allow(ctx, key, s.loginAcctMax, time.Minute)
-	if err != nil {
-		// Fail open when limiter store errors so login continues uninterrupted.
-		allowed = true
+	return hex.EncodeToString(sum[:8])
+}
+
+func loginFailKey(ctx context.Context, emailHash string) string {
+	ip := strings.TrimSpace(middleware.ClientIPFromContext(ctx))
+	if ip == "" {
+		ip = unknownLoginClientIP
 	}
-	if allowed {
+	return loginFailKeyPrefix + ip + ":" + emailHash
+}
+
+func (s *AuthService) enforceLoginRateLimit(ctx context.Context, emailHash string) error {
+	if s.limiter == nil {
 		return nil
 	}
-	return domain.NewRateLimitedError("too many login attempts; please wait and try again").WithRetryAfter(retryAfter)
+	if peeker, ok := s.limiter.(RateLimitPeeker); ok {
+		allowed, retryAfter, err := peeker.Peek(ctx, loginFailKey(ctx, emailHash), loginFailMax)
+		if err == nil && !allowed {
+			return domain.NewRateLimitedError("too many failed login attempts; please wait and try again").WithRetryAfter(retryAfter)
+		}
+	}
+	if s.loginAcctMax <= 0 {
+		return nil
+	}
+	allowed, retryAfter, err := s.limiter.Allow(ctx, loginAcctKeyPrefix+emailHash, s.loginAcctMax, time.Minute)
+	if err == nil && !allowed {
+		return domain.NewRateLimitedError("too many login attempts; please wait and try again").WithRetryAfter(retryAfter)
+	}
+	// Fail open when limiter store errors so login continues uninterrupted.
+	return nil
+}
+
+func (s *AuthService) recordFailedLogin(ctx context.Context, emailHash string) {
+	if s.limiter == nil {
+		return
+	}
+	if _, _, err := s.limiter.Allow(ctx, loginFailKey(ctx, emailHash), loginFailMax, loginFailWindow); err != nil {
+		return
+	}
+}
+
+func (s *AuthService) resetFailedLogin(ctx context.Context, emailHash string) {
+	if resetter, ok := s.limiter.(RateLimitResetter); ok {
+		if err := resetter.Reset(ctx, loginFailKey(ctx, emailHash)); err != nil {
+			return
+		}
+	}
 }
 
 func (s *AuthService) signJWT(u *domain.User) (string, error) {

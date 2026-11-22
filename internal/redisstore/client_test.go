@@ -77,6 +77,74 @@ func TestClient_StrictFailOpenOnNilOrUnreachableRedis(t *testing.T) {
 	unreachable.InvalidateEvents(ctx, id, id, uuid.Nil)
 }
 
+func TestClient_ConsumeOnceFailOpenOnNilClient(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	var nilClient *Client
+	firstUse, err := nilClient.ConsumeOnce(ctx, "pow:used:nil", time.Minute)
+	if err != nil || !firstUse {
+		t.Fatalf("nil ConsumeOnce = (%v, %v), want fail-open (true, nil)", firstUse, err)
+	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:         "127.0.0.1:1",
+		DialTimeout:  30 * time.Millisecond,
+		ReadTimeout:  30 * time.Millisecond,
+		WriteTimeout: 30 * time.Millisecond,
+		MaxRetries:   0,
+	})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	unreachable := NewClientFromGoRedis(rdb, 30*time.Millisecond, slog.New(slog.DiscardHandler))
+	firstUse, err = unreachable.ConsumeOnce(ctx, "pow:used:unreachable", time.Minute)
+	if err != nil || !firstUse {
+		t.Fatalf("unreachable ConsumeOnce = (%v, %v), want fail-open (true, nil)", firstUse, err)
+	}
+	firstUse, err = unreachable.ConsumeOnce(ctx, "   ", time.Minute)
+	if err != nil || !firstUse {
+		t.Fatalf("blank key ConsumeOnce = (%v, %v), want fail-open (true, nil)", firstUse, err)
+	}
+	firstUse, err = unreachable.ConsumeOnce(ctx, "pow:used:badttl", 0)
+	if err != nil || !firstUse {
+		t.Fatalf("non-positive TTL ConsumeOnce = (%v, %v), want fail-open (true, nil)", firstUse, err)
+	}
+}
+
+func TestClient_PeekAndResetFailOpenOnNilClient(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	var nilClient *Client
+	allowed, retryAfter, err := nilClient.Peek(ctx, "rl:nil", 5)
+	if err != nil || !allowed || retryAfter != 0 {
+		t.Fatalf("nil Peek = (%v, %v, %v), want fail-open (true, 0, nil)", allowed, retryAfter, err)
+	}
+	if err := nilClient.Reset(ctx, "rl:nil"); err != nil {
+		t.Fatalf("nil Reset = %v, want nil", err)
+	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:         "127.0.0.1:1",
+		DialTimeout:  30 * time.Millisecond,
+		ReadTimeout:  30 * time.Millisecond,
+		WriteTimeout: 30 * time.Millisecond,
+		MaxRetries:   0,
+	})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	unreachable := NewClientFromGoRedis(rdb, 30*time.Millisecond, slog.New(slog.DiscardHandler))
+	allowed, retryAfter, err = unreachable.Peek(ctx, "rl:unreachable", 5)
+	if err != nil || !allowed || retryAfter != 0 {
+		t.Fatalf("unreachable Peek = (%v, %v, %v), want fail-open (true, 0, nil)", allowed, retryAfter, err)
+	}
+	if err := unreachable.Reset(ctx, "rl:unreachable"); err != nil {
+		t.Fatalf("unreachable Reset = %v, want nil", err)
+	}
+}
+
 func openLiveTestRedisClient(t *testing.T) *Client {
 	t.Helper()
 	redisURL := os.Getenv("REDIS_URL")
@@ -136,4 +204,57 @@ func TestClient_LiveRedisEventCache(t *testing.T) {
 	if _, hit := c.GetEventDetail(ctx, evID); hit {
 		t.Fatal("expected detail cache invalidated")
 	}
+}
+
+func TestClient_LiveRedisConsumeOnce(t *testing.T) {
+	ctx := t.Context()
+	c := openLiveTestRedisClient(t)
+
+	key := "pow:used:live:" + uuid.NewString()
+	first, err := c.ConsumeOnce(ctx, key, 10*time.Second)
+	if err != nil || !first {
+		t.Fatalf("first ConsumeOnce = (%v, %v), want (true, nil)", first, err)
+	}
+	second, err := c.ConsumeOnce(ctx, key, 10*time.Second)
+	if err != nil || second {
+		t.Fatalf("second ConsumeOnce = (%v, %v), want (false, nil)", second, err)
+	}
+}
+
+func assertLivePeekState(t *testing.T, c *Client, key string, limit int, wantAllowed bool) {
+	t.Helper()
+	allowed, retryAfter, err := c.Peek(t.Context(), key, limit)
+	if err != nil || allowed != wantAllowed || (wantAllowed && retryAfter != 0) || (!wantAllowed && retryAfter < time.Second) {
+		t.Fatalf("Peek(%q) = (%v, %v, %v), wantAllowed=%v", key, allowed, retryAfter, err, wantAllowed)
+	}
+}
+
+func assertLiveAllowOK(t *testing.T, c *Client, key string, limit int) {
+	t.Helper()
+	allowed, retryAfter, err := c.Allow(t.Context(), key, limit, 10*time.Second)
+	if err != nil || !allowed || retryAfter != 0 {
+		t.Fatalf("Allow(%q) = (%v, %v, %v), want allowed", key, allowed, retryAfter, err)
+	}
+}
+
+func TestClient_LiveRedisPeekAndReset(t *testing.T) {
+	ctx := t.Context()
+	c := openLiveTestRedisClient(t)
+
+	rlKey := "rl:live:peek:" + uuid.NewString()
+	assertLivePeekState(t, c, rlKey, 2, true)
+	for range 2 {
+		assertLiveAllowOK(t, c, rlKey, 2)
+	}
+	for range 2 {
+		assertLivePeekState(t, c, rlKey, 2, false)
+	}
+	if count, err := c.rdb.Get(ctx, rlKey).Int(); err != nil || count != 2 {
+		t.Fatalf("counter after Peek = (%d, %v), want (2, nil)", count, err)
+	}
+	if err := c.Reset(ctx, rlKey); err != nil {
+		t.Fatalf("Reset = %v, want nil", err)
+	}
+	assertLivePeekState(t, c, rlKey, 2, true)
+	assertLiveAllowOK(t, c, rlKey, 2)
 }

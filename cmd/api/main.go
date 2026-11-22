@@ -23,6 +23,7 @@ import (
 	"github.com/torikh42/treean/internal/redisstore"
 	"github.com/torikh42/treean/internal/repository"
 	"github.com/torikh42/treean/internal/routes"
+	"github.com/torikh42/treean/internal/security"
 	"github.com/torikh42/treean/internal/service"
 	"github.com/torikh42/treean/internal/worker"
 )
@@ -32,6 +33,7 @@ const (
 	defaultIdleTimeout          = 60 * time.Second
 	defaultShutdownTimeout      = 10 * time.Second
 	defaultExpirySweepBatchSize = 50
+	defaultPoWChallengeTTL      = 120 * time.Second
 )
 
 func main() {
@@ -162,11 +164,24 @@ func buildHandlerWithRedis(logger *slog.Logger, cfg config.Config, pool *pgxpool
 	}
 
 	var limiter middleware.RateLimiter
+	var nonceStore middleware.NonceConsumer
+	var powGuard middleware.ChallengeGuard
+	log := safeLogger(logger)
 	if redisClient != nil && cfg.RateLimitEnabled {
 		limiter = redisClient
+		nonceStore = redisClient
+		powSecret := cfg.PoWSecret
+		if powSecret == "" {
+			powSecret = cfg.JWTSecret
+		}
+		verifier, powErr := security.NewPoWVerifier(powSecret, cfg.PoWDifficulty, defaultPoWChallengeTTL)
+		if powErr != nil {
+			log.Warn("proof-of-work guard disabled due to invalid configuration", slog.String("error", powErr.Error()))
+		} else {
+			powGuard = verifier
+		}
 	}
 
-	log := safeLogger(logger)
 	return routes.NewRouter(routes.RouterDeps{
 		Logger:        log,
 		Authenticator: authSvc,
@@ -180,10 +195,15 @@ func buildHandlerWithRedis(logger *slog.Logger, cfg config.Config, pool *pgxpool
 		RateLimitPolicy: middleware.RateLimitPolicy{
 			Enabled:          cfg.RateLimitEnabled && redisClient != nil,
 			RegisterMax:      cfg.RateLimitRegisterMax,
+			RegisterHardMax:  cfg.RateLimitRegisterHardMax,
 			LoginIPMax:       cfg.RateLimitLoginIPMax,
+			LoginIPHardMax:   cfg.RateLimitLoginIPHardMax,
 			OrderUserMax:     cfg.RateLimitOrderUserMax,
 			OrderIPMax:       cfg.RateLimitOrderIPMax,
 			DemoFlashSaleMax: cfg.RateLimitDemoFlashSaleMax,
+			Challenge:        powGuard,
+			NonceStore:       nonceStore,
+			PoWTTL:           defaultPoWChallengeTTL,
 		},
 		AllowDemoHeaderAuth: cfg.AllowDemoHeaderAuth,
 		CORSAllowedOrigins:  cfg.CORSAllowedOrigins,

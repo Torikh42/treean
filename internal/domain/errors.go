@@ -26,6 +26,7 @@ const (
 	ErrCodeEmailAlreadyExists    = "EMAIL_ALREADY_EXISTS"
 	ErrCodeInvalidCredentials    = "INVALID_CREDENTIALS" //nolint:gosec // G101 false positive: public machine error code constant, not a secret.
 	ErrCodeRateLimited           = "RATE_LIMITED"
+	ErrCodeChallengeRequired     = "CHALLENGE_REQUIRED"
 	ErrCodeValidation            = "VALIDATION_ERROR"
 )
 
@@ -103,4 +104,9 @@ func NewUnauthorizedWebhookError(msg string) *DomainError {
 // NewRateLimitedError creates a 429 error when a client exceeds a configured rate limit.
 func NewRateLimitedError(msg string) *DomainError {
 	return NewDomainError(http.StatusTooManyRequests, ErrCodeRateLimited, msg)
+}
+
+// NewChallengeRequiredError creates a 403 error when a request must solve a Proof-of-Work challenge.
+func NewChallengeRequiredError(msg string) *DomainError {
+	return NewDomainError(http.StatusForbidden, ErrCodeChallengeRequired, msg)
 }

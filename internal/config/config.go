@@ -11,15 +11,20 @@ import (
 )
 
 const (
-	redactedValue             = "[REDACTED]"
-	defaultRedisTimeout       = 500 * time.Millisecond
-	defaultEventCacheTTL      = 3 * time.Second
-	defaultRateLimitRegMax    = 5
-	defaultRateLimitLoginMax  = 10
-	defaultRateLimitLoginIP   = 60
-	defaultRateLimitOrderUser = 20
-	defaultRateLimitOrderIP   = 300
-	defaultRateLimitDemoMax   = 5
+	redactedValue               = "[REDACTED]"
+	defaultRedisTimeout         = 500 * time.Millisecond
+	defaultEventCacheTTL        = 3 * time.Second
+	defaultRateLimitRegMax      = 5
+	defaultRateLimitRegHardMax  = 100
+	defaultRateLimitLoginMax    = 10
+	defaultRateLimitLoginIP     = 60
+	defaultRateLimitLoginIPHard = 600
+	defaultRateLimitOrderUser   = 20
+	defaultRateLimitOrderIP     = 0
+	defaultRateLimitDemoMax     = 5
+	defaultPoWDifficulty        = 16
+	minPoWDifficulty            = 8
+	maxPoWDifficulty            = 24
 )
 
 // Config holds validated runtime configuration for the API server and workers.
@@ -33,11 +38,15 @@ type Config struct {
 	EventCacheTTL             time.Duration
 	RateLimitEnabled          bool
 	RateLimitRegisterMax      int
+	RateLimitRegisterHardMax  int
 	RateLimitLoginMax         int
 	RateLimitLoginIPMax       int
+	RateLimitLoginIPHardMax   int
 	RateLimitOrderUserMax     int
 	RateLimitOrderIPMax       int
 	RateLimitDemoFlashSaleMax int
+	PoWDifficulty             int
+	PoWSecret                 string
 	AllowDemoHeaderAuth       bool
 	ExpirySweepInterval       time.Duration
 	HTTPReadTimeout           time.Duration
@@ -58,6 +67,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("database_url", redactedValue),
 		slog.String("jwt_secret", redactedValue),
 		slog.String("webhook_secret", redactedValue),
+		slog.String("pow_secret", redactedValue),
 		slog.String("redis_url", redisState),
 		slog.Duration("redis_timeout", c.RedisTimeout),
 		slog.Duration("event_cache_ttl", c.EventCacheTTL),
@@ -161,8 +171,32 @@ func loadRedisAndRateLimitConfig(cfg *Config) error {
 	if cfg.RateLimitEnabled, err = parseBool("RATE_LIMIT_ENABLED", true); err != nil {
 		return err
 	}
+	if err = loadRateLimitThresholds(cfg); err != nil {
+		return err
+	}
+	if cfg.PoWDifficulty, err = parsePositiveInt("POW_DIFFICULTY", defaultPoWDifficulty); err != nil {
+		return err
+	}
+	if cfg.PoWDifficulty < minPoWDifficulty || cfg.PoWDifficulty > maxPoWDifficulty {
+		return fmt.Errorf("invalid POW_DIFFICULTY (%d): must be between %d and %d", cfg.PoWDifficulty, minPoWDifficulty, maxPoWDifficulty)
+	}
+	cfg.PoWSecret = strings.TrimSpace(os.Getenv("POW_SECRET"))
+	if cfg.PoWSecret == "" {
+		cfg.PoWSecret = cfg.JWTSecret
+	}
+	return nil
+}
+
+func loadRateLimitThresholds(cfg *Config) error {
+	var err error
 	if cfg.RateLimitRegisterMax, err = parsePositiveInt("RATE_LIMIT_REGISTER_MAX", defaultRateLimitRegMax); err != nil {
 		return err
+	}
+	if cfg.RateLimitRegisterHardMax, err = parsePositiveInt("RATE_LIMIT_REGISTER_HARD_MAX", defaultRateLimitRegHardMax); err != nil {
+		return err
+	}
+	if cfg.RateLimitRegisterHardMax < cfg.RateLimitRegisterMax {
+		return fmt.Errorf("RATE_LIMIT_REGISTER_HARD_MAX (%d) cannot be less than RATE_LIMIT_REGISTER_MAX (%d)", cfg.RateLimitRegisterHardMax, cfg.RateLimitRegisterMax)
 	}
 	if cfg.RateLimitLoginMax, err = parsePositiveInt("RATE_LIMIT_LOGIN_MAX", defaultRateLimitLoginMax); err != nil {
 		return err
@@ -170,10 +204,16 @@ func loadRedisAndRateLimitConfig(cfg *Config) error {
 	if cfg.RateLimitLoginIPMax, err = parsePositiveInt("RATE_LIMIT_LOGIN_IP_MAX", defaultRateLimitLoginIP); err != nil {
 		return err
 	}
+	if cfg.RateLimitLoginIPHardMax, err = parsePositiveInt("RATE_LIMIT_LOGIN_IP_HARD_MAX", defaultRateLimitLoginIPHard); err != nil {
+		return err
+	}
+	if cfg.RateLimitLoginIPHardMax < cfg.RateLimitLoginIPMax {
+		return fmt.Errorf("RATE_LIMIT_LOGIN_IP_HARD_MAX (%d) cannot be less than RATE_LIMIT_LOGIN_IP_MAX (%d)", cfg.RateLimitLoginIPHardMax, cfg.RateLimitLoginIPMax)
+	}
 	if cfg.RateLimitOrderUserMax, err = parsePositiveInt("RATE_LIMIT_ORDER_USER_MAX", defaultRateLimitOrderUser); err != nil {
 		return err
 	}
-	if cfg.RateLimitOrderIPMax, err = parsePositiveInt("RATE_LIMIT_ORDER_IP_MAX", defaultRateLimitOrderIP); err != nil {
+	if cfg.RateLimitOrderIPMax, err = parseNonNegativeInt("RATE_LIMIT_ORDER_IP_MAX", defaultRateLimitOrderIP); err != nil {
 		return err
 	}
 	if cfg.RateLimitDemoFlashSaleMax, err = parsePositiveInt("RATE_LIMIT_DEMO_FLASH_SALE_MAX", defaultRateLimitDemoMax); err != nil {
@@ -248,16 +288,24 @@ func parseInt32(key string, fallback int32) (int32, error) {
 }
 
 func parsePositiveInt(key string, fallback int) (int, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
+	return parseIntAtLeast(key, fallback, 1, "positive")
+}
+
+func parseNonNegativeInt(envKey string, defaultVal int) (int, error) {
+	return parseIntAtLeast(envKey, defaultVal, 0, "non-negative")
+}
+
+func parseIntAtLeast(envKey string, defaultVal, minVal int, label string) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(envKey))
 	if raw == "" {
-		return fallback, nil
+		return defaultVal, nil
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, fmt.Errorf("invalid integer for %s: %w", key, err)
+		return 0, fmt.Errorf("invalid integer for %s: %w", envKey, err)
 	}
-	if n <= 0 {
-		return 0, fmt.Errorf("invalid positive integer for %s: %d", key, n)
+	if n < minVal {
+		return 0, fmt.Errorf("invalid %s integer for %s: %d", label, envKey, n)
 	}
 	return n, nil
 }

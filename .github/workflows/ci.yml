@@ -35,10 +35,15 @@ jobs:
             exit 1
           fi
 
+      - name: Read pinned golangci-lint version
+        id: golangci
+        run: echo "version=$(tr -d '[:space:]' < .golangci-version)" >> "$GITHUB_OUTPUT"
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          # Single source of truth shared with .githooks/pre-commit and `make lint`.
+          version: ${{ steps.golangci.outputs.version }}
 
       - name: Run Unit Tests with Race Detector
         run: go test -race ./internal/... ./migrations/... ./cmd/...

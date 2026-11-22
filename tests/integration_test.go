@@ -5,6 +5,7 @@ package tests_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/torikh42/treean/internal/redisstore"
 	"github.com/torikh42/treean/internal/repository"
 	"github.com/torikh42/treean/internal/routes"
+	"github.com/torikh42/treean/internal/security"
 	"github.com/torikh42/treean/internal/service"
 	"github.com/torikh42/treean/internal/worker"
 )
@@ -142,6 +145,9 @@ func setupTestEnvWithRateLimit(t *testing.T, policy middleware.RateLimitPolicy, 
 		sweeper.WithCache(redisStore)
 		if policy.Enabled {
 			limiter = redisStore
+			if policy.Challenge != nil && policy.NonceStore == nil {
+				policy.NonceStore = redisStore
+			}
 			if loginAcctMax > 0 {
 				authSvc.WithLoginRateLimiter(redisStore, loginAcctMax)
 			}
@@ -181,30 +187,30 @@ func setupTestEnvWithRateLimit(t *testing.T, policy middleware.RateLimitPolicy, 
 	}
 }
 
-func executeJSON(
+func executeJSONWithHeaders(
 	ctx context.Context,
 	client *http.Client,
 	targetURL string,
 	method string,
 	body any,
 	headers map[string]string,
-) (int, []byte, error) {
+) (int, http.Header, []byte, error) {
 	if client == nil {
-		return 0, nil, errors.New("http client is required")
+		return 0, nil, nil, errors.New("http client is required")
 	}
 
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return 0, nil, fmt.Errorf("marshaling request body: %w", err)
+			return 0, nil, nil, fmt.Errorf("marshaling request body: %w", err)
 		}
 		reader = bytes.NewReader(b)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, targetURL, reader)
 	if err != nil {
-		return 0, nil, fmt.Errorf("building %s %s request: %w", method, targetURL, err)
+		return 0, nil, nil, fmt.Errorf("building %s %s request: %w", method, targetURL, err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -215,18 +221,47 @@ func executeJSON(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, nil, fmt.Errorf("executing %s %s: %w", method, targetURL, err)
+		return 0, nil, nil, fmt.Errorf("executing %s %s: %w", method, targetURL, err)
 	}
 
 	raw, readErr := io.ReadAll(resp.Body)
 	closeErr := resp.Body.Close()
 	if readErr != nil {
-		return resp.StatusCode, nil, fmt.Errorf("reading %s %s response body: %w", method, targetURL, readErr)
+		return resp.StatusCode, resp.Header, nil, fmt.Errorf("reading %s %s response body: %w", method, targetURL, readErr)
 	}
 	if closeErr != nil {
-		return resp.StatusCode, nil, fmt.Errorf("closing %s %s response body: %w", method, targetURL, closeErr)
+		return resp.StatusCode, resp.Header, nil, fmt.Errorf("closing %s %s response body: %w", method, targetURL, closeErr)
 	}
-	return resp.StatusCode, raw, nil
+	return resp.StatusCode, resp.Header, raw, nil
+}
+
+func executeJSON(
+	ctx context.Context,
+	client *http.Client,
+	targetURL string,
+	method string,
+	body any,
+	headers map[string]string,
+) (int, []byte, error) {
+	status, _, raw, err := executeJSONWithHeaders(ctx, client, targetURL, method, body, headers)
+	return status, raw, err
+}
+
+func mustJSONWithHeaders(
+	t *testing.T,
+	env *testEnv,
+	path string,
+	method string,
+	body any,
+	headers map[string]string,
+) (int, http.Header, []byte) {
+	t.Helper()
+
+	status, respHeaders, raw, err := executeJSONWithHeaders(t.Context(), env.client, env.server.URL+path, method, body, headers)
+	if err != nil {
+		t.Fatalf("%s %s failed: %v", method, path, err)
+	}
+	return status, respHeaders, raw
 }
 
 func mustJSON(
@@ -1268,6 +1303,133 @@ func TestIntegration_RateLimiting_And_EventCache_WithRedis(t *testing.T) {
 	if rem := findTierQuota(t, afterSweep, regTier.ID); rem != 18 {
 		t.Fatalf("expected invalidated event cache after sweep showing 18, got %d", rem)
 	}
+}
+
+func TestIntegration_CGNATSharedIPCheckoutsAndAdaptivePoW(t *testing.T) {
+	if os.Getenv("REDIS_URL") == "" {
+		t.Skip("REDIS_URL not configured")
+	}
+
+	const (
+		sharedCGNATIP = "103.55.10.2"
+		powDifficulty = 8
+	)
+	pow, err := security.NewPoWVerifier("integration-pow-secret", powDifficulty, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("NewPoWVerifier: %v", err)
+	}
+
+	policy := middleware.RateLimitPolicy{
+		Enabled:          true,
+		RegisterMax:      5,
+		RegisterHardMax:  100,
+		LoginIPMax:       60,
+		LoginIPHardMax:   600,
+		OrderUserMax:     20,
+		OrderIPMax:       0,
+		DemoFlashSaleMax: 5,
+		Challenge:        pow,
+	}
+	env := setupTestEnvWithRateLimit(t, policy, 10)
+
+	// 1. 10 distinct authenticated buyers sharing one CG-NAT IP checkout without hitting IP 429.
+	ev := createTestEvent(t, env, 20, 10)
+	regTier := findTierByName(t, ev, "Reguler")
+	for range 10 {
+		headers := roleHeaders(uuid.NewString(), roleBuyer)
+		headers["X-Real-IP"] = sharedCGNATIP
+		ord := createOrder(t, env, headers, ev.ID, []map[string]any{
+			{"ticket_type_id": regTier.ID.String(), "quantity": 1},
+		})
+		if ord.TotalTickets != 1 {
+			t.Fatalf("order total_tickets = %d, want 1", ord.TotalTickets)
+		}
+	}
+	assertEventTierQuotas(t, env, ev.ID, regTier.ID, ev.TicketTypes[1].ID, 10, 10)
+
+	// 2. Shared-IP registrations 1..5 pass without PoW; 6th triggers 403 CHALLENGE_REQUIRED.
+	for i := range 5 {
+		st, _, raw := mustJSONWithHeaders(t, env, "/api/v1/auth/register", http.MethodPost, map[string]any{
+			"email":    fmt.Sprintf("cgnat-reg-%d-%s@event.local", i+1, uuid.NewString()[:8]),
+			"name":     fmt.Sprintf("CGNAT Buyer %d", i+1),
+			"password": "password123",
+			"role":     roleBuyer,
+		}, map[string]string{"X-Real-IP": sharedCGNATIP})
+		if st != http.StatusCreated {
+			t.Fatalf("registration %d status = %d, want 201 (body=%s)", i+1, st, string(raw))
+		}
+	}
+
+	chStatus, chHeaders, chRaw := mustJSONWithHeaders(t, env, "/api/v1/auth/register", http.MethodPost, map[string]any{
+		"email":    fmt.Sprintf("cgnat-reg-6-%s@event.local", uuid.NewString()[:8]),
+		"name":     "CGNAT Buyer 6",
+		"password": "password123",
+		"role":     roleBuyer,
+	}, map[string]string{"X-Real-IP": sharedCGNATIP})
+	assertAPIError(t, chStatus, chRaw, http.StatusForbidden, domain.ErrCodeChallengeRequired)
+	challenge := chHeaders.Get("X-PoW-Challenge")
+	if challenge == "" {
+		t.Fatal("expected non-empty X-PoW-Challenge header on 403 response")
+	}
+
+	// 3. Solving challenge and retrying with X-PoW-Solution succeeds (201 Created).
+	solution := solvePoWChallengeForTest(t, challenge, powDifficulty)
+	okStatus, _, okRaw := mustJSONWithHeaders(t, env, "/api/v1/auth/register", http.MethodPost, map[string]any{
+		"email":    fmt.Sprintf("cgnat-reg-solved-%s@event.local", uuid.NewString()[:8]),
+		"name":     "CGNAT Buyer Solved",
+		"password": "password123",
+		"role":     roleBuyer,
+	}, map[string]string{
+		"X-Real-IP":      sharedCGNATIP,
+		"X-PoW-Solution": solution,
+	})
+	if okStatus != http.StatusCreated {
+		t.Fatalf("solved PoW retry status = %d, want 201 (body=%s)", okStatus, string(okRaw))
+	}
+
+	// 4. Replaying the same X-PoW-Solution against live Redis is rejected (403 CHALLENGE_REQUIRED).
+	replayStatus, replayHeaders, replayRaw := mustJSONWithHeaders(t, env, "/api/v1/auth/register", http.MethodPost, map[string]any{
+		"email":    fmt.Sprintf("cgnat-reg-replay-%s@event.local", uuid.NewString()[:8]),
+		"name":     "CGNAT Buyer Replay",
+		"password": "password123",
+		"role":     roleBuyer,
+	}, map[string]string{
+		"X-Real-IP":      sharedCGNATIP,
+		"X-PoW-Solution": solution,
+	})
+	assertAPIError(t, replayStatus, replayRaw, http.StatusForbidden, domain.ErrCodeChallengeRequired)
+	freshChallenge := replayHeaders.Get("X-PoW-Challenge")
+	if freshChallenge == "" || freshChallenge == challenge {
+		t.Fatalf("expected fresh X-PoW-Challenge on replay, got %q (prev %q)", freshChallenge, challenge)
+	}
+}
+
+func solvePoWChallengeForTest(t *testing.T, challenge string, difficulty int) string {
+	t.Helper()
+	for nonce := 0; nonce < 5_000_000; nonce++ {
+		nonceStr := strconv.Itoa(nonce)
+		sum := sha256.Sum256([]byte(challenge + ":" + nonceStr))
+		if hasLeadingZeroBitsForTest(sum[:], difficulty) {
+			return challenge + ":" + nonceStr
+		}
+	}
+	t.Fatalf("failed to solve PoW challenge %q at difficulty %d", challenge, difficulty)
+	return ""
+}
+
+func hasLeadingZeroBitsForTest(digest []byte, bits int) bool {
+	fullBytes := bits / 8
+	for i := range fullBytes {
+		if digest[i] != 0 {
+			return false
+		}
+	}
+	remBits := bits % 8
+	if remBits == 0 {
+		return true
+	}
+	mask := byte(0xFF << (8 - remBits))
+	return (digest[fullBytes] & mask) == 0
 }
 
 func mustMarshalJSON(t *testing.T, v any) []byte {
