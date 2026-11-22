@@ -11,27 +11,31 @@ import (
 )
 
 const (
-	testEnvDatabaseURL           = "DATABASE_URL"
-	testEnvJWTSecret             = "JWT_SECRET"
-	testEnvWebhookSecret         = "WEBHOOK_SECRET"
-	testEnvPort                  = "PORT"
-	testEnvAllowDemoHeaderAuth   = "ALLOW_DEMO_HEADER_AUTH"
-	testEnvExpirySweepInterval   = "EXPIRY_SWEEP_INTERVAL"
-	testEnvHTTPReadTimeout       = "HTTP_READ_TIMEOUT"
-	testEnvHTTPWriteTimeout      = "HTTP_WRITE_TIMEOUT"
-	testEnvDBMaxConns            = "DB_MAX_CONNS"
-	testEnvDBMinConns            = "DB_MIN_CONNS"
-	testEnvCORSAllowedOrigins    = "CORS_ALLOWED_ORIGINS"
-	testEnvRedisURL              = "REDIS_URL"
-	testEnvRedisTimeout          = "REDIS_TIMEOUT"
-	testEnvEventCacheTTL         = "EVENT_CACHE_TTL"
-	testEnvRateLimitEnabled      = "RATE_LIMIT_ENABLED"
-	testEnvRateLimitRegisterMax  = "RATE_LIMIT_REGISTER_MAX"
-	testEnvRateLimitLoginMax     = "RATE_LIMIT_LOGIN_MAX"
-	testEnvRateLimitLoginIPMax   = "RATE_LIMIT_LOGIN_IP_MAX"
-	testEnvRateLimitOrderUserMax = "RATE_LIMIT_ORDER_USER_MAX"
-	testEnvRateLimitOrderIPMax   = "RATE_LIMIT_ORDER_IP_MAX"
-	testEnvRateLimitDemoMax      = "RATE_LIMIT_DEMO_FLASH_SALE_MAX"
+	testEnvDatabaseURL              = "DATABASE_URL"
+	testEnvJWTSecret                = "JWT_SECRET"
+	testEnvWebhookSecret            = "WEBHOOK_SECRET"
+	testEnvPort                     = "PORT"
+	testEnvAllowDemoHeaderAuth      = "ALLOW_DEMO_HEADER_AUTH"
+	testEnvExpirySweepInterval      = "EXPIRY_SWEEP_INTERVAL"
+	testEnvHTTPReadTimeout          = "HTTP_READ_TIMEOUT"
+	testEnvHTTPWriteTimeout         = "HTTP_WRITE_TIMEOUT"
+	testEnvDBMaxConns               = "DB_MAX_CONNS"
+	testEnvDBMinConns               = "DB_MIN_CONNS"
+	testEnvCORSAllowedOrigins       = "CORS_ALLOWED_ORIGINS"
+	testEnvRedisURL                 = "REDIS_URL"
+	testEnvRedisTimeout             = "REDIS_TIMEOUT"
+	testEnvEventCacheTTL            = "EVENT_CACHE_TTL"
+	testEnvRateLimitEnabled         = "RATE_LIMIT_ENABLED"
+	testEnvRateLimitRegisterMax     = "RATE_LIMIT_REGISTER_MAX"
+	testEnvRateLimitLoginMax        = "RATE_LIMIT_LOGIN_MAX"
+	testEnvRateLimitLoginIPMax      = "RATE_LIMIT_LOGIN_IP_MAX"
+	testEnvRateLimitOrderUserMax    = "RATE_LIMIT_ORDER_USER_MAX"
+	testEnvRateLimitOrderIPMax      = "RATE_LIMIT_ORDER_IP_MAX"
+	testEnvRateLimitDemoMax         = "RATE_LIMIT_DEMO_FLASH_SALE_MAX"
+	testEnvRateLimitRegisterHardMax = "RATE_LIMIT_REGISTER_HARD_MAX"
+	testEnvRateLimitLoginIPHardMax  = "RATE_LIMIT_LOGIN_IP_HARD_MAX"
+	testEnvPoWDifficulty            = "POW_DIFFICULTY"
+	testEnvPoWSecret                = "POW_SECRET"
 
 	testDatabaseURL   = "postgres://u:p@localhost:5432/db?sslmode=disable"
 	testJWTSecret     = "jwt-secret"
@@ -66,6 +70,10 @@ func clearOptionalEnv(t *testing.T) {
 		testEnvRateLimitOrderUserMax,
 		testEnvRateLimitOrderIPMax,
 		testEnvRateLimitDemoMax,
+		testEnvRateLimitRegisterHardMax,
+		testEnvRateLimitLoginIPHardMax,
+		testEnvPoWDifficulty,
+		testEnvPoWSecret,
 	} {
 		t.Setenv(key, "")
 	}
@@ -165,8 +173,12 @@ func assertDefaultRedisAndRateLimit(t *testing.T, cfg Config) {
 		{"RateLimitLoginMax", cfg.RateLimitLoginMax, 10},
 		{"RateLimitLoginIPMax", cfg.RateLimitLoginIPMax, 60},
 		{"RateLimitOrderUserMax", cfg.RateLimitOrderUserMax, 20},
-		{"RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 300},
+		{"RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 0},
+		{"RateLimitRegisterHardMax", cfg.RateLimitRegisterHardMax, 100},
+		{"RateLimitLoginIPHardMax", cfg.RateLimitLoginIPHardMax, 600},
 		{"RateLimitDemoFlashSaleMax", cfg.RateLimitDemoFlashSaleMax, 5},
+		{"PoWDifficulty", cfg.PoWDifficulty, 16},
+		{"PoWSecret", cfg.PoWSecret, testJWTSecret},
 	}
 	for _, tc := range checks {
 		if tc.got != tc.want {
@@ -356,6 +368,7 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 		DatabaseURL:         "postgres://secret_user:super_secret_pass@db:5432/prod",
 		JWTSecret:           "super-secret-jwt-key",
 		WebhookSecret:       "super-secret-webhook-key",
+		PoWSecret:           "super-secret-pow-key",
 		RedisURL:            "redis://:super-secret-redis-pass@redis:6379/0",
 		AllowDemoHeaderAuth: true,
 		ExpirySweepInterval: 5 * time.Second,
@@ -371,7 +384,7 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 	logger.Info("config loaded", slog.Any("config", cfg))
 
 	rawOut := buf.String()
-	for _, secret := range []string{cfg.DatabaseURL, cfg.JWTSecret, cfg.WebhookSecret, cfg.RedisURL} {
+	for _, secret := range []string{cfg.DatabaseURL, cfg.JWTSecret, cfg.WebhookSecret, cfg.PoWSecret, cfg.RedisURL} {
 		if strings.Contains(rawOut, secret) {
 			t.Fatalf("log output leaked secret %q: %s", secret, rawOut)
 		}
@@ -383,6 +396,7 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 			DatabaseURL             string        `json:"database_url"`
 			JWTSecret               string        `json:"jwt_secret"`
 			WebhookSecret           string        `json:"webhook_secret"`
+			PoWSecret               string        `json:"pow_secret"`
 			AllowDemoHeaderAuth     bool          `json:"allow_demo_header_auth"`
 			ExpirySweepInterval     time.Duration `json:"expiry_sweep_interval"`
 			HTTPReadTimeout         time.Duration `json:"http_read_timeout"`
@@ -405,6 +419,9 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 	if payload.Config.WebhookSecret != "[REDACTED]" {
 		t.Fatalf("logged webhook_secret = %q, want [REDACTED]", payload.Config.WebhookSecret)
 	}
+	if payload.Config.PoWSecret != "[REDACTED]" {
+		t.Fatalf("logged pow_secret = %q, want [REDACTED]", payload.Config.PoWSecret)
+	}
 	if payload.Config.Port != "8080" || !payload.Config.AllowDemoHeaderAuth {
 		t.Fatalf("unexpected non-secret fields in log: %+v", payload.Config)
 	}
@@ -416,4 +433,157 @@ func TestConfig_LogValueRedactsSecrets(t *testing.T) {
 		payload.Config.CORSAllowedOriginsCount != 2 {
 		t.Fatalf("unexpected timing/pool/cors fields in log: %+v", payload.Config)
 	}
+}
+
+func TestLoad_CGNATRateLimitDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		setRequiredEnv(t)
+		clearOptionalEnv(t)
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.RateLimitOrderIPMax != 0 {
+			t.Fatalf("RateLimitOrderIPMax = %d, want 0", cfg.RateLimitOrderIPMax)
+		}
+		if cfg.RateLimitRegisterHardMax != 100 {
+			t.Fatalf("RateLimitRegisterHardMax = %d, want 100", cfg.RateLimitRegisterHardMax)
+		}
+		if cfg.RateLimitLoginIPHardMax != 600 {
+			t.Fatalf("RateLimitLoginIPHardMax = %d, want 600", cfg.RateLimitLoginIPHardMax)
+		}
+		if cfg.PoWDifficulty != 16 {
+			t.Fatalf("PoWDifficulty = %d, want 16", cfg.PoWDifficulty)
+		}
+		if cfg.PoWSecret != testJWTSecret {
+			t.Fatalf("PoWSecret = %q, want fallback to JWTSecret %q", cfg.PoWSecret, testJWTSecret)
+		}
+	})
+
+	t.Run("explicit order IP zero and PoW overrides", func(t *testing.T) {
+		setRequiredEnv(t)
+		clearOptionalEnv(t)
+		t.Setenv(testEnvRateLimitOrderIPMax, "0")
+		t.Setenv(testEnvRateLimitRegisterHardMax, "150")
+		t.Setenv(testEnvRateLimitLoginIPHardMax, "900")
+		t.Setenv(testEnvPoWDifficulty, "20")
+		t.Setenv(testEnvPoWSecret, " custom-pow-secret ")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.RateLimitOrderIPMax != 0 {
+			t.Fatalf("RateLimitOrderIPMax = %d, want 0", cfg.RateLimitOrderIPMax)
+		}
+		if cfg.RateLimitRegisterHardMax != 150 {
+			t.Fatalf("RateLimitRegisterHardMax = %d, want 150", cfg.RateLimitRegisterHardMax)
+		}
+		if cfg.RateLimitLoginIPHardMax != 900 {
+			t.Fatalf("RateLimitLoginIPHardMax = %d, want 900", cfg.RateLimitLoginIPHardMax)
+		}
+		if cfg.PoWDifficulty != 20 {
+			t.Fatalf("PoWDifficulty = %d, want 20", cfg.PoWDifficulty)
+		}
+		if cfg.PoWSecret != "custom-pow-secret" {
+			t.Fatalf("PoWSecret = %q, want custom-pow-secret", cfg.PoWSecret)
+		}
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
+		logger.Info("config loaded", slog.Any("config", cfg))
+		if strings.Contains(buf.String(), "custom-pow-secret") {
+			t.Fatalf("LogValue leaked PoWSecret: %s", buf.String())
+		}
+		if !strings.Contains(buf.String(), `"pow_secret":"[REDACTED]"`) {
+			t.Fatalf("LogValue missing redacted pow_secret: %s", buf.String())
+		}
+	})
+
+	t.Run("blank POW_SECRET falls back to JWTSecret", func(t *testing.T) {
+		setRequiredEnv(t)
+		clearOptionalEnv(t)
+		t.Setenv(testEnvPoWSecret, "   \t  ")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.PoWSecret != testJWTSecret {
+			t.Fatalf("PoWSecret = %q, want fallback %q", cfg.PoWSecret, testJWTSecret)
+		}
+	})
+
+	t.Run("PoW difficulty bounds", func(t *testing.T) {
+		for _, valid := range []string{"8", "24"} {
+			t.Run("valid_"+valid, func(t *testing.T) {
+				setRequiredEnv(t)
+				clearOptionalEnv(t)
+				t.Setenv(testEnvPoWDifficulty, valid)
+
+				if _, err := Load(); err != nil {
+					t.Fatalf("expected difficulty %s to pass, got %v", valid, err)
+				}
+			})
+		}
+
+		for _, invalid := range []string{"7", "30"} {
+			t.Run("invalid_"+invalid, func(t *testing.T) {
+				setRequiredEnv(t)
+				clearOptionalEnv(t)
+				t.Setenv(testEnvPoWDifficulty, invalid)
+
+				_, err := Load()
+				if err == nil {
+					t.Fatalf("expected error for POW_DIFFICULTY=%s", invalid)
+				}
+				if !strings.Contains(err.Error(), "must be between 8 and 24") {
+					t.Fatalf("error %q does not contain 'must be between 8 and 24'", err.Error())
+				}
+			})
+		}
+	})
+
+	t.Run("invalid rate limit bounds", func(t *testing.T) {
+		cases := []struct {
+			name    string
+			env     map[string]string
+			wantErr string
+		}{
+			{
+				name:    "negative order IP max",
+				env:     map[string]string{testEnvRateLimitOrderIPMax: "-1"},
+				wantErr: testEnvRateLimitOrderIPMax,
+			},
+			{
+				name:    "register hard max below soft max",
+				env:     map[string]string{testEnvRateLimitRegisterMax: "10", testEnvRateLimitRegisterHardMax: "5"},
+				wantErr: testEnvRateLimitRegisterHardMax,
+			},
+			{
+				name:    "login IP hard max below soft max",
+				env:     map[string]string{testEnvRateLimitLoginIPMax: "100", testEnvRateLimitLoginIPHardMax: "50"},
+				wantErr: testEnvRateLimitLoginIPHardMax,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				setRequiredEnv(t)
+				clearOptionalEnv(t)
+				for k, v := range tc.env {
+					t.Setenv(k, v)
+				}
+
+				_, err := Load()
+				if err == nil {
+					t.Fatalf("expected error for %s", tc.name)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error %q does not mention %s", err.Error(), tc.wantErr)
+				}
+			})
+		}
+	})
 }
