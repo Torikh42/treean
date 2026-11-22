@@ -20,7 +20,7 @@ In Docker Compose, the system uses a **Single Entry Point** pattern. Only the Ng
            |  - Serves React SPA static bundle (/)             |
            |  - Proxies /api, /docs, /openapi.json, /health    |
            |  - Overwrites X-Forwarded-For with $remote_addr   |
-           |  - Edge IP flood limit: 50 req/s (burst 250)      |
+           |  - Edge IP flood limit: 250 req/s (burst 1000)    |
            +---------------------------------------------------+
                                      |
                      Docker private network (app-network)
@@ -83,12 +83,12 @@ Full trade-offs are documented in [`DECISIONS.md`](DECISIONS.md) (`ADR-001` thro
      - Duplicate `settlement` webhooks on an already `PAID` order return `200 OK` (`idempotent_replay: true`, `IGNORED_DUPLICATE`) without creating extra tickets.
      - Late `settlement` webhooks arriving after `EXPIRED` are rejected with `409 ORDER_EXPIRED` and flagged `REJECTED_LATE_EXPIRED` (`requires_refund = true`) so venue capacity is never oversold.
 
-6. **Multi-Layer Rate Limiting & Short-TTL Cache (`ADR-009`)**
-   - **Problem:** Shared campus/office WiFi puts many legitimate buyers behind one public IP, while bots try to spam account registration or hammer `GET /api/v1/events`.
+6. **CG-NAT Adaptive Rate Limiting, Pre-Bcrypt Account Guard & Short-TTL Cache (`ADR-009`)**
+   - **Problem:** Mobile carriers and campus/office WiFi place hundreds of legitimate users behind a single CG-NAT IPv4 address (`X-Real-IP`). Strict per-IP checkout limits block innocent buyers, while brute-force login attempts waste `bcrypt` CPU or lock out an entire office.
    - **Solution:**
-     - **Checkout (`POST /api/v1/orders`) & Cancel:** Rate-limited primarily per authenticated `user_id` (`20 req/min`) plus a high per-IP safety ceiling (`300 req/min`), so buyers on shared WiFi do not block each other.
-     - **Registration (`POST /api/v1/auth/register`):** Strict per-IP limit (`5 req/15m`) to slow down bulk bot sign-ups.
-     - **Login (`POST /api/v1/auth/login`):** Limited per `IP + email` (`10 req/min`) and per IP (`60 req/min`).
+     - **Checkout (`POST /api/v1/orders`) & Cancel:** Rate-limited per authenticated `user_id` (`20 req/min`) with `RATE_LIMIT_ORDER_IP_MAX=0` by default (per-IP ceiling disabled so CG-NAT buyers never block one another; an optional positive IP cap remains configurable).
+     - **Registration (`POST /api/v1/auth/register`):** Soft IP threshold (`5 req/15m`) switches to self-hosted stateless HMAC-SHA-256 Proof-of-Work (`403 CHALLENGE_REQUIRED` with `X-PoW-Challenge` / `X-PoW-Solution`, difficulty `16`, single-use replay guard in Redis), up to a hard IP ceiling (`100 req/15m`, `429 RATE_LIMITED`). The frontend solves challenges transparently via Web Crypto (`crypto.subtle.digest`) and retries once automatically.
+     - **Login (`POST /api/v1/auth/login`):** Pre-`bcrypt` account guard keyed by normalized email SHA-256 hash (`10 req/min` total attempts + `5` failed attempts / `15m` lockout reset on success, `migadu/alps`-inspired) plus adaptive per-IP PoW (`60 req/min` soft threshold, `600 req/min` hard IP ceiling) and Nginx edge protection (`250 req/s`, `burst=1000 nodelay`).
      - **Event Catalog Cache:** `GET /api/v1/events` and `GET /api/v1/events/{id}` cache responses in Redis for `3s` (`EVENT_CACHE_TTL`) and invalidate immediately whenever an event, order, payment webhook, or expiry sweep changes quota.
 
 ---
@@ -203,12 +203,16 @@ make down
 | `REDIS_TIMEOUT` | No | `500ms` | `500ms` | Max dial/read/write timeout per Redis operation before failing open |
 | `EVENT_CACHE_TTL` | No | `3s` | `3s` | Redis TTL for public `GET /api/v1/events` and `GET /api/v1/events/{id}` cache |
 | `RATE_LIMIT_ENABLED` | No | `true` | `true` | Enables Redis rate limiting when `REDIS_URL` is configured |
-| `RATE_LIMIT_REGISTER_MAX` | No | `5` | `5` | Max `POST /api/v1/auth/register` requests per IP per `15 minutes` |
-| `RATE_LIMIT_LOGIN_MAX` | No | `10` | `10` | Max `POST /api/v1/auth/login` attempts per `IP + email` per `1 minute` |
-| `RATE_LIMIT_LOGIN_IP_MAX` | No | `60` | `60` | Max `POST /api/v1/auth/login` requests per IP per `1 minute` |
+| `RATE_LIMIT_REGISTER_MAX` | No | `5` | `5` | Soft `POST /api/v1/auth/register` threshold per IP per `15 minutes` before PoW challenge |
+| `RATE_LIMIT_REGISTER_HARD_MAX` | No | `100` | `100` (default) | Hard `POST /api/v1/auth/register` ceiling per IP per `15 minutes` (`429 RATE_LIMITED`) |
+| `RATE_LIMIT_LOGIN_MAX` | No | `10` | `10` | Max `POST /api/v1/auth/login` attempts per email hash per `1 minute` (plus `5` failed / `15m` lockout) |
+| `RATE_LIMIT_LOGIN_IP_MAX` | No | `60` | `60` | Soft `POST /api/v1/auth/login` threshold per IP per `1 minute` before PoW challenge |
+| `RATE_LIMIT_LOGIN_IP_HARD_MAX` | No | `600` | `600` (default) | Hard `POST /api/v1/auth/login` ceiling per IP per `1 minute` (`429 RATE_LIMITED`) |
 | `RATE_LIMIT_ORDER_USER_MAX` | No | `20` | `20` | Max order create/cancel requests per authenticated `user_id` per `1 minute` |
-| `RATE_LIMIT_ORDER_IP_MAX` | No | `300` | `300` | Max order create/cancel requests per IP per `1 minute` (shared WiFi ceiling) |
+| `RATE_LIMIT_ORDER_IP_MAX` | No | `0` | `300` | Optional order create/cancel ceiling per IP per `1 minute` (`0` disables IP limit for CG-NAT safety) |
 | `RATE_LIMIT_DEMO_FLASH_SALE_MAX` | No | `5` | `5` | Max `POST /api/v1/demo/flash-sale` runs per IP per `1 minute` |
+| `POW_DIFFICULTY` | No | `16` | `16` (default) | Required leading zero bits (`8..24`) for self-hosted SHA-256 PoW challenges |
+| `POW_SECRET` | No | `JWT_SECRET` | `JWT_SECRET` (fallback) | Optional HMAC-SHA-256 signing key for `X-PoW-Challenge` tokens; defaults to `JWT_SECRET` when blank |
 | `JWT_SECRET` | Yes | - | `dev-jwt-secret-change-in-production` | HS256 secret used to sign and verify Bearer JWT tokens |
 | `WEBHOOK_SECRET` | Yes | - | `dev-webhook-secret-change-in-production` | Shared secret for SHA-512 payment webhook verification (fails closed if blank) |
 | `ALLOW_DEMO_HEADER_AUTH` | No | `false` | `true` | Allows `X-User-ID` and `X-User-Role` demo headers for local concurrency tests |
@@ -277,8 +281,8 @@ All routes are available through the Nginx entry point at `http://localhost:5173
 | `GET` | `/docs` | Public | Scalar interactive OpenAPI 3.1 documentation UI |
 | `GET` | `/openapi.json` | Public | Generated OpenAPI 3.1 JSON specification |
 | `GET` | `/demo` | Public | Minimal HTML API landing stub |
-| `POST` | `/api/v1/auth/register` | Public | Register `ORGANIZER` or `BUYER` account and return JWT (`201`, IP rate-limited) |
-| `POST` | `/api/v1/auth/login` | Public | Authenticate email/password and return JWT (`200`, `IP + email` and IP rate-limited) |
+| `POST` | `/api/v1/auth/register` | Public | Register `ORGANIZER` or `BUYER` account and return JWT (`201`, soft IP PoW `403 CHALLENGE_REQUIRED`, hard IP `429`) |
+| `POST` | `/api/v1/auth/login` | Public | Authenticate email/password and return JWT (`200`, email-hash + failed-attempt guard, soft IP PoW `403`, hard IP `429`) |
 | `GET` | `/api/v1/auth/me` | Authenticated | Return caller profile (`200`, or `401` if token is invalid or user was deleted) |
 | `POST` | `/api/v1/events` | `ORGANIZER` | Create event with 2 to 10 ticket tiers atomically (`201`, invalidates event cache) |
 | `GET` | `/api/v1/events` | Public | List public events with live remaining quota (`200`, `3s` Redis read-through cache) |
@@ -422,7 +426,7 @@ $env:REDIS_URL = "redis://localhost:6379/0"
 go test -v -race -tags=integration ./tests/...
 ```
 
-`tests/integration_test.go` verifies all 11 end-to-end scenarios against live PostgreSQL (and Redis when `REDIS_URL` is set):
+`tests/integration_test.go` verifies all 12 end-to-end scenarios against live PostgreSQL (and Redis when `REDIS_URL` is set):
 
 - `TestIntegration_HappyFlow_OrderPayTicketsHistory`: multi-tier event creation, live quota view, 15-minute checkout hold, order access control, payment settlement, unique ticket issuance, and buyer order history.
 - `TestIntegration_BuyerFourTicketLimit_AndCancellation`: concurrent `3 + 3` same-buyer bookings (`1` created, `1` `409 BUYER_LIMIT_EXCEEDED`), cancellation quota restoration, and allowance reset.
@@ -435,6 +439,7 @@ go test -v -race -tags=integration ./tests/...
 - `TestIntegration_OrganizerEventDelete`: blocks deleting events with existing orders (`409 EVENT_HAS_ORDERS`) and allows `204 No Content` deletion for unused events.
 - `TestIntegration_OrderIdempotencyKey_ConcurrentReplay`: 5 concurrent checkout requests with the same `Idempotency-Key` create exactly 1 order and deduct quota once, and subsequent replay returns `201 Created` with `Idempotent-Replay: true` even after remaining quota reaches `0`.
 - `TestIntegration_RateLimiting_And_EventCache_WithRedis`: verifies live Redis IP rate limiting on `/api/v1/auth/register` (`429 RATE_LIMITED`), per-user rate limiting on `/api/v1/orders` without blocking another buyer on the same IP, and `3s` event catalog cache population plus invalidation on checkout.
+- `TestIntegration_CGNATSharedIPCheckoutsAndAdaptivePoW`: verifies 10 distinct buyers sharing `X-Real-IP: 103.55.10.2` check out cleanly when `RATE_LIMIT_ORDER_IP_MAX=0`, shared-IP registrations `1..5` pass, the `6th` triggers `403 CHALLENGE_REQUIRED` with `X-PoW-Challenge`, solving + retrying with `X-PoW-Solution` returns `201 Created`, and replaying the same `X-PoW-Solution` is rejected against live Redis.
 
 ### Formatting, Linting & Pre-Commit Hooks
 
