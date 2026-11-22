@@ -16,8 +16,8 @@ const (
 	headerExposeHeaders    = "Access-Control-Expose-Headers"
 	headerMaxAge           = "Access-Control-Max-Age"
 	corsAllowedMethods     = "GET, POST, PUT, DELETE, OPTIONS"
-	corsAllowedHeaders     = "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key"
-	corsExposedHeaders     = "Idempotent-Replay, Retry-After"
+	corsAllowedHeaders     = "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key, X-PoW-Solution"
+	corsExposedHeaders     = "Idempotent-Replay, Retry-After, X-PoW-Challenge"
 	corsPreflightMaxAgeSec = "600"
 )
 

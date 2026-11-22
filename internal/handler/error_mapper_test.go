@@ -49,3 +49,23 @@ func TestAPIError_NilAndStatusBehavior(t *testing.T) {
 		t.Fatalf("Retry-After header = %q, want 15", got)
 	}
 }
+
+func TestMapServiceError_ChallengeRequired(t *testing.T) {
+	t.Parallel()
+
+	challengeErr := domain.NewChallengeRequiredError("proof-of-work verification required")
+	mapped := handler.MapServiceError(context.Background(), nil, challengeErr)
+	apiErr, ok := mapped.(*handler.APIError)
+	if !ok {
+		t.Fatalf("expected *handler.APIError, got %T", mapped)
+	}
+	if apiErr.GetStatus() != http.StatusForbidden || apiErr.Status != http.StatusForbidden {
+		t.Fatalf("status = (%d, %d), want 403", apiErr.GetStatus(), apiErr.Status)
+	}
+	if apiErr.ErrorCode != domain.ErrCodeChallengeRequired {
+		t.Fatalf("ErrorCode = %q, want %q", apiErr.ErrorCode, domain.ErrCodeChallengeRequired)
+	}
+	if apiErr.Detail != "proof-of-work verification required" {
+		t.Fatalf("Detail = %q, want proof-of-work verification required", apiErr.Detail)
+	}
+}

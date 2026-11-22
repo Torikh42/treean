@@ -1413,11 +1413,11 @@ func TestRouter_CORS(t *testing.T) {
 		if got := optRec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, DELETE, OPTIONS" {
 			t.Fatalf("Access-Control-Allow-Methods = %q, want GET, POST, PUT, DELETE, OPTIONS", got)
 		}
-		if got := optRec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key" {
-			t.Fatalf("Access-Control-Allow-Headers = %q, want Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key", got)
+		if got := optRec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key, X-PoW-Solution" {
+			t.Fatalf("Access-Control-Allow-Headers = %q, want Content-Type, Authorization, X-User-ID, X-User-Role, Idempotency-Key, X-PoW-Solution", got)
 		}
-		if got := optRec.Header().Get("Access-Control-Expose-Headers"); got != "Idempotent-Replay, Retry-After" {
-			t.Fatalf("Access-Control-Expose-Headers = %q, want Idempotent-Replay, Retry-After", got)
+		if got := optRec.Header().Get("Access-Control-Expose-Headers"); got != "Idempotent-Replay, Retry-After, X-PoW-Challenge" {
+			t.Fatalf("Access-Control-Expose-Headers = %q, want Idempotent-Replay, Retry-After, X-PoW-Challenge", got)
 		}
 
 		disallowedReq := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
@@ -1459,4 +1459,26 @@ func TestRouter_CORS(t *testing.T) {
 			t.Fatalf("expected empty ACAO when custom origins override defaults, got %q", got)
 		}
 	})
+}
+
+func TestRouter_ChallengeRequiredAndRateLimitHeaders(t *testing.T) {
+	t.Parallel()
+
+	// Verify CORS exposes X-PoW-Challenge and allows X-PoW-Solution on auth routes.
+	h := newTestHarness(false)
+	optReq := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/auth/register", nil)
+	optReq.Header.Set("Origin", "http://localhost:5173")
+	optReq.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	optReq.Header.Set("Access-Control-Request-Headers", "Content-Type, X-PoW-Solution")
+	optRec := httptest.NewRecorder()
+	h.router.ServeHTTP(optRec, optReq)
+	if optRec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS status = %d, want 204", optRec.Code)
+	}
+	if !strings.Contains(optRec.Header().Get("Access-Control-Allow-Headers"), "X-PoW-Solution") {
+		t.Fatalf("Access-Control-Allow-Headers missing X-PoW-Solution: %q", optRec.Header().Get("Access-Control-Allow-Headers"))
+	}
+	if !strings.Contains(optRec.Header().Get("Access-Control-Expose-Headers"), "X-PoW-Challenge") {
+		t.Fatalf("Access-Control-Expose-Headers missing X-PoW-Challenge: %q", optRec.Header().Get("Access-Control-Expose-Headers"))
+	}
 }
