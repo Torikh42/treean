@@ -232,7 +232,7 @@ func TestPoWVerifier_RejectsInsufficientLeadingZeros(t *testing.T) {
 
 	// Find a nonce that meets 8 zero bits but fails 12 zero bits.
 	var nearMissNonce string
-	for i := 0; i < 100_000; i++ {
+	for i := range 100_000 {
 		nonce := fmt.Sprintf("%x", i)
 		sum := sha256.Sum256([]byte(challenge + ":" + nonce))
 		if digestHasLeadingZeroBits(sum[:], 8) && !digestHasLeadingZeroBits(sum[:], difficulty) {

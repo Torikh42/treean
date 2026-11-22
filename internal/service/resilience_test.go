@@ -269,7 +269,7 @@ func TestAuthService_LoginRateLimitIsolatesDistinctEmailsOnSameIP(t *testing.T) 
 	}
 }
 
-func mustLoginDomainErr(t *testing.T, ctx context.Context, svc *service.AuthService, email, pass, wantCode string) {
+func mustLoginDomainErr(ctx context.Context, t *testing.T, svc *service.AuthService, email, pass, wantCode string) {
 	t.Helper()
 	_, err := svc.Login(ctx, email, pass)
 	de, ok := errors.AsType[*domain.DomainError](err)
@@ -278,7 +278,7 @@ func mustLoginDomainErr(t *testing.T, ctx context.Context, svc *service.AuthServ
 	}
 }
 
-func mustLoginOK(t *testing.T, ctx context.Context, svc *service.AuthService, email, pass string) {
+func mustLoginOK(ctx context.Context, t *testing.T, svc *service.AuthService, email, pass string) {
 	t.Helper()
 	res, err := svc.Login(ctx, email, pass)
 	if err != nil || res == nil || res.AccessToken == "" {
@@ -308,27 +308,27 @@ func TestAuthService_LoginFailedLockoutResetsOnSuccess(t *testing.T) {
 	failKey := "rl:login:fail:103.1.2.3:" + emailHashForTest(targetEmail)
 
 	for range 4 {
-		mustLoginDomainErr(t, ctx, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
+		mustLoginDomainErr(ctx, t, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
 	}
 	if limiter.counts[failKey] != 4 {
 		t.Fatalf("fail count = %d, want 4", limiter.counts[failKey])
 	}
-	mustLoginOK(t, ctx, svc, targetEmail, "right-password")
+	mustLoginOK(ctx, t, svc, targetEmail, "right-password")
 	if limiter.counts[failKey] != 0 || len(limiter.resets) != 1 || limiter.resets[0] != failKey {
 		t.Fatalf("expected Reset(%q) on success, counts=%v resets=%v", failKey, limiter.counts, limiter.resets)
 	}
 
 	for range 5 {
-		mustLoginDomainErr(t, ctx, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
+		mustLoginDomainErr(ctx, t, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
 	}
 	callsBeforeLockout := repo.findCalls
-	mustLoginDomainErr(t, ctx, svc, targetEmail, "right-password", domain.ErrCodeRateLimited)
+	mustLoginDomainErr(ctx, t, svc, targetEmail, "right-password", domain.ErrCodeRateLimited)
 	if repo.findCalls != callsBeforeLockout {
 		t.Fatalf("FindByEmail called %d times on locked account (before=%d)", repo.findCalls, callsBeforeLockout)
 	}
 
 	limiter.peekErr = errors.New("redis timeout")
-	mustLoginOK(t, ctx, svc, targetEmail, "right-password")
+	mustLoginOK(ctx, t, svc, targetEmail, "right-password")
 }
 
 func TestAuthService_LoginFailedLockoutIsolatedPerIPAndEmail_AndMissingUserTimingParity(t *testing.T) {
@@ -360,11 +360,11 @@ func TestAuthService_LoginFailedLockoutIsolatedPerIPAndEmail_AndMissingUserTimin
 	legitOtherIPCtx := captureClientIPContext(t, "203.0.113.42:2222")
 
 	for range 5 {
-		mustLoginDomainErr(t, attackerCtx, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
+		mustLoginDomainErr(attackerCtx, t, svc, targetEmail, "wrong-password", domain.ErrCodeInvalidCredentials)
 	}
-	mustLoginDomainErr(t, attackerCtx, svc, targetEmail, "correct-pass", domain.ErrCodeRateLimited)
-	mustLoginOK(t, legitOtherIPCtx, svc, targetEmail, "correct-pass")
-	mustLoginOK(t, attackerCtx, svc, neighborEmail, "correct-pass")
+	mustLoginDomainErr(attackerCtx, t, svc, targetEmail, "correct-pass", domain.ErrCodeRateLimited)
+	mustLoginOK(legitOtherIPCtx, t, svc, targetEmail, "correct-pass")
+	mustLoginOK(attackerCtx, t, svc, neighborEmail, "correct-pass")
 
 	for _, tc := range []struct {
 		name  string
@@ -374,7 +374,7 @@ func TestAuthService_LoginFailedLockoutIsolatedPerIPAndEmail_AndMissingUserTimin
 		{name: "empty_password_hash", email: demoEmail},
 	} {
 		start := time.Now()
-		mustLoginDomainErr(t, t.Context(), svc, tc.email, "any-password", domain.ErrCodeInvalidCredentials)
+		mustLoginDomainErr(t.Context(), t, svc, tc.email, "any-password", domain.ErrCodeInvalidCredentials)
 		if elapsed := time.Since(start); elapsed < 5*time.Millisecond {
 			t.Fatalf("%s: expected cost-10 dummy bcrypt parity latency (>=5ms), got %v", tc.name, elapsed)
 		}

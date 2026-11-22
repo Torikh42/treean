@@ -16,7 +16,7 @@ test-integration:
 	go test -v -race -tags=integration ./tests/...
 
 lint:
-	golangci-lint run ./...
+	docker run --rm -v "$(CURDIR):/app" -v golangci-lint-cache:/root/.cache -w /app golangci/golangci-lint:$(shell tr -d '[:space:]' < .golangci-version) golangci-lint run
 
 fmt:
 	gofmt -s -w .

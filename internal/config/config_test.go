@@ -441,135 +441,133 @@ func assertIntField(t *testing.T, name string, got, want int) {
 	}
 }
 
-func TestLoad_CGNATRateLimitDefaultsAndOverrides(t *testing.T) {
-	t.Run("defaults", func(t *testing.T) {
-		setRequiredEnv(t)
-		clearOptionalEnv(t)
+func TestLoad_CGNATDefaults(t *testing.T) {
+	setRequiredEnv(t)
+	clearOptionalEnv(t)
 
-		cfg, err := Load()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		assertIntField(t, "RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 0)
-		assertIntField(t, "RateLimitRegisterHardMax", cfg.RateLimitRegisterHardMax, 100)
-		assertIntField(t, "RateLimitLoginIPHardMax", cfg.RateLimitLoginIPHardMax, 600)
-		assertIntField(t, "PoWDifficulty", cfg.PoWDifficulty, 16)
-		if cfg.PoWSecret != testJWTSecret {
-			t.Fatalf("PoWSecret = %q, want fallback to JWTSecret %q", cfg.PoWSecret, testJWTSecret)
-		}
-	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertIntField(t, "RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 0)
+	assertIntField(t, "RateLimitRegisterHardMax", cfg.RateLimitRegisterHardMax, 100)
+	assertIntField(t, "RateLimitLoginIPHardMax", cfg.RateLimitLoginIPHardMax, 600)
+	assertIntField(t, "PoWDifficulty", cfg.PoWDifficulty, 16)
+	if cfg.PoWSecret != testJWTSecret {
+		t.Fatalf("PoWSecret = %q, want fallback to JWTSecret %q", cfg.PoWSecret, testJWTSecret)
+	}
+}
 
-	t.Run("explicit order IP zero and PoW overrides", func(t *testing.T) {
-		setRequiredEnv(t)
-		clearOptionalEnv(t)
-		t.Setenv(testEnvRateLimitOrderIPMax, "0")
-		t.Setenv(testEnvRateLimitRegisterHardMax, "150")
-		t.Setenv(testEnvRateLimitLoginIPHardMax, "900")
-		t.Setenv(testEnvPoWDifficulty, "20")
-		t.Setenv(testEnvPoWSecret, " custom-pow-secret ")
+func TestLoad_CGNATExplicitOverrides(t *testing.T) {
+	setRequiredEnv(t)
+	clearOptionalEnv(t)
+	t.Setenv(testEnvRateLimitOrderIPMax, "0")
+	t.Setenv(testEnvRateLimitRegisterHardMax, "150")
+	t.Setenv(testEnvRateLimitLoginIPHardMax, "900")
+	t.Setenv(testEnvPoWDifficulty, "20")
+	t.Setenv(testEnvPoWSecret, " custom-pow-secret ")
 
-		cfg, err := Load()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		assertIntField(t, "RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 0)
-		assertIntField(t, "RateLimitRegisterHardMax", cfg.RateLimitRegisterHardMax, 150)
-		assertIntField(t, "RateLimitLoginIPHardMax", cfg.RateLimitLoginIPHardMax, 900)
-		assertIntField(t, "PoWDifficulty", cfg.PoWDifficulty, 20)
-		if cfg.PoWSecret != "custom-pow-secret" {
-			t.Fatalf("PoWSecret = %q, want custom-pow-secret", cfg.PoWSecret)
-		}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertIntField(t, "RateLimitOrderIPMax", cfg.RateLimitOrderIPMax, 0)
+	assertIntField(t, "RateLimitRegisterHardMax", cfg.RateLimitRegisterHardMax, 150)
+	assertIntField(t, "RateLimitLoginIPHardMax", cfg.RateLimitLoginIPHardMax, 900)
+	assertIntField(t, "PoWDifficulty", cfg.PoWDifficulty, 20)
+	if cfg.PoWSecret != "custom-pow-secret" {
+		t.Fatalf("PoWSecret = %q, want custom-pow-secret", cfg.PoWSecret)
+	}
 
-		var buf bytes.Buffer
-		slog.New(slog.NewJSONHandler(&buf, nil)).Info("config loaded", slog.Any("config", cfg))
-		if strings.Contains(buf.String(), "custom-pow-secret") || !strings.Contains(buf.String(), `"pow_secret":"[REDACTED]"`) {
-			t.Fatalf("LogValue PoWSecret redaction mismatch: %s", buf.String())
-		}
-	})
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("config loaded", slog.Any("config", cfg))
+	if strings.Contains(buf.String(), "custom-pow-secret") || !strings.Contains(buf.String(), `"pow_secret":"[REDACTED]"`) {
+		t.Fatalf("LogValue PoWSecret redaction mismatch: %s", buf.String())
+	}
+}
 
-	t.Run("blank POW_SECRET falls back to JWTSecret", func(t *testing.T) {
-		setRequiredEnv(t)
-		clearOptionalEnv(t)
-		t.Setenv(testEnvPoWSecret, "   \t  ")
+func TestLoad_CGNATBlankPoWSecretFallsBackToJWTSecret(t *testing.T) {
+	setRequiredEnv(t)
+	clearOptionalEnv(t)
+	t.Setenv(testEnvPoWSecret, "   \t  ")
 
-		cfg, err := Load()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cfg.PoWSecret != testJWTSecret {
-			t.Fatalf("PoWSecret = %q, want fallback %q", cfg.PoWSecret, testJWTSecret)
-		}
-	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.PoWSecret != testJWTSecret {
+		t.Fatalf("PoWSecret = %q, want fallback %q", cfg.PoWSecret, testJWTSecret)
+	}
+}
 
-	t.Run("PoW difficulty bounds", func(t *testing.T) {
-		for _, valid := range []string{"8", "24"} {
-			t.Run("valid_"+valid, func(t *testing.T) {
-				setRequiredEnv(t)
-				clearOptionalEnv(t)
-				t.Setenv(testEnvPoWDifficulty, valid)
+func TestLoad_CGNATPoWDifficultyBounds(t *testing.T) {
+	for _, valid := range []string{"8", "24"} {
+		t.Run("valid_"+valid, func(t *testing.T) {
+			setRequiredEnv(t)
+			clearOptionalEnv(t)
+			t.Setenv(testEnvPoWDifficulty, valid)
 
-				if _, err := Load(); err != nil {
-					t.Fatalf("expected difficulty %s to pass, got %v", valid, err)
-				}
-			})
-		}
+			if _, err := Load(); err != nil {
+				t.Fatalf("expected difficulty %s to pass, got %v", valid, err)
+			}
+		})
+	}
 
-		for _, invalid := range []string{"7", "30"} {
-			t.Run("invalid_"+invalid, func(t *testing.T) {
-				setRequiredEnv(t)
-				clearOptionalEnv(t)
-				t.Setenv(testEnvPoWDifficulty, invalid)
+	for _, invalid := range []string{"7", "30"} {
+		t.Run("invalid_"+invalid, func(t *testing.T) {
+			setRequiredEnv(t)
+			clearOptionalEnv(t)
+			t.Setenv(testEnvPoWDifficulty, invalid)
 
-				_, err := Load()
-				if err == nil {
-					t.Fatalf("expected error for POW_DIFFICULTY=%s", invalid)
-				}
-				if !strings.Contains(err.Error(), "must be between 8 and 24") {
-					t.Fatalf("error %q does not contain 'must be between 8 and 24'", err.Error())
-				}
-			})
-		}
-	})
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected error for POW_DIFFICULTY=%s", invalid)
+			}
+			if !strings.Contains(err.Error(), "must be between 8 and 24") {
+				t.Fatalf("error %q does not contain 'must be between 8 and 24'", err.Error())
+			}
+		})
+	}
+}
 
-	t.Run("invalid rate limit bounds", func(t *testing.T) {
-		cases := []struct {
-			name    string
-			env     map[string]string
-			wantErr string
-		}{
-			{
-				name:    "negative order IP max",
-				env:     map[string]string{testEnvRateLimitOrderIPMax: "-1"},
-				wantErr: testEnvRateLimitOrderIPMax,
-			},
-			{
-				name:    "register hard max below soft max",
-				env:     map[string]string{testEnvRateLimitRegisterMax: "10", testEnvRateLimitRegisterHardMax: "5"},
-				wantErr: testEnvRateLimitRegisterHardMax,
-			},
-			{
-				name:    "login IP hard max below soft max",
-				env:     map[string]string{testEnvRateLimitLoginIPMax: "100", testEnvRateLimitLoginIPHardMax: "50"},
-				wantErr: testEnvRateLimitLoginIPHardMax,
-			},
-		}
+func TestLoad_CGNATInvalidRateLimitBounds(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{
+			name:    "negative order IP max",
+			env:     map[string]string{testEnvRateLimitOrderIPMax: "-1"},
+			wantErr: testEnvRateLimitOrderIPMax,
+		},
+		{
+			name:    "register hard max below soft max",
+			env:     map[string]string{testEnvRateLimitRegisterMax: "10", testEnvRateLimitRegisterHardMax: "5"},
+			wantErr: testEnvRateLimitRegisterHardMax,
+		},
+		{
+			name:    "login IP hard max below soft max",
+			env:     map[string]string{testEnvRateLimitLoginIPMax: "100", testEnvRateLimitLoginIPHardMax: "50"},
+			wantErr: testEnvRateLimitLoginIPHardMax,
+		},
+	}
 
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				setRequiredEnv(t)
-				clearOptionalEnv(t)
-				for k, v := range tc.env {
-					t.Setenv(k, v)
-				}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			clearOptionalEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
 
-				_, err := Load()
-				if err == nil {
-					t.Fatalf("expected error for %s", tc.name)
-				}
-				if !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("error %q does not mention %s", err.Error(), tc.wantErr)
-				}
-			})
-		}
-	})
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not mention %s", err.Error(), tc.wantErr)
+			}
+		})
+	}
 }

@@ -25,10 +25,13 @@ const (
 
 var (
 	// ErrInvalidPoWConfig indicates missing or out-of-range PoW verifier configuration.
-	ErrInvalidPoWConfig    = errors.New("invalid proof-of-work configuration")
+	ErrInvalidPoWConfig = errors.New("invalid proof-of-work configuration")
+	// ErrInvalidPoWChallenge indicates a malformed, tampered, or wrong-IP challenge token.
 	ErrInvalidPoWChallenge = errors.New("invalid proof-of-work challenge")
+	// ErrExpiredPoWChallenge indicates a challenge token past its expiry.
 	ErrExpiredPoWChallenge = errors.New("expired proof-of-work challenge")
-	ErrInvalidPoWSolution  = errors.New("invalid proof-of-work solution")
+	// ErrInvalidPoWSolution indicates a malformed header or nonce lacking the required leading zero bits.
+	ErrInvalidPoWSolution = errors.New("invalid proof-of-work solution")
 )
 
 // PoWVerifier issues and verifies stateless HMAC-SHA256 Proof-of-Work challenges bound to a client IP and expiry.
