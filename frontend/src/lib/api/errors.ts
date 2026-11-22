@@ -13,6 +13,7 @@ export interface ParsedApiError {
 }
 
 const BUYER_LIMIT_RE = /active\/paid=(\d+),\s*requested=(\d+),\s*max=(\d+)/i;
+const POW_SOLVER_DETAIL_RE = /crypto\.subtle|https|max iterations|malformed/i;
 
 function isApiErrorObject(value: unknown): value is ApiError {
   if (!value || typeof value !== "object") return false;
@@ -50,6 +51,13 @@ function buildDynamicCopy(
   fieldMessages: ReadonlyArray<string>,
 ): ErrorCopy | null {
   if (code === "CHALLENGE_REQUIRED") {
+    if (POW_SOLVER_DETAIL_RE.test(rawDetail)) {
+      return {
+        userTitle: "Verification required",
+        userMessage: rawDetail,
+        actionHint: "Use HTTPS or a supported browser with Web Crypto enabled, then submit again.",
+      };
+    }
     return {
       userTitle: "Verification required",
       userMessage: "Shared network verification timed out or could not be completed automatically.",

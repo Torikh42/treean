@@ -292,7 +292,7 @@ func TestAuthService_LoginFailedLockoutResetsOnSuccess(t *testing.T) {
 	limiter := newMemoryStatefulRateLimiter()
 	svc := service.NewAuthService(repo, "jwt-secret").WithLoginRateLimiter(limiter, 20)
 	ctx := captureClientIPContext(t, "103.1.2.3:9999")
-	failKey := "rl:login:fail:" + emailHashForTest(targetEmail)
+	failKey := "rl:login:fail:103.1.2.3:" + emailHashForTest(targetEmail)
 
 	// 4 wrong passwords -> 401 INVALID_CREDENTIALS, then 1 right password clears fail counter via Reset.
 	for i := range 4 {
@@ -337,6 +337,88 @@ func TestAuthService_LoginFailedLockoutResetsOnSuccess(t *testing.T) {
 	failOpenRes, failOpenErr := svc.Login(ctx, targetEmail, "right-password")
 	if failOpenErr != nil || failOpenRes == nil || failOpenRes.AccessToken == "" {
 		t.Fatalf("expected fail-open login when Peek errors, got res=%v err=%v", failOpenRes, failOpenErr)
+	}
+}
+
+func TestAuthService_LoginFailedLockoutIsolatedPerIPAndEmail_AndMissingUserTimingParity(t *testing.T) {
+	t.Parallel()
+
+	repo := newMockUserRepo()
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-pass"), 10)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	const (
+		targetEmail   = "organizer@event.local"
+		neighborEmail = "neighbor@event.local"
+		demoEmail     = "demo-nopass@event.local"
+	)
+	for _, u := range []*domain.User{
+		{ID: uuid.New(), Email: targetEmail, Name: "Organizer", PasswordHash: string(hash), Role: domain.RoleOrganizer},
+		{ID: uuid.New(), Email: neighborEmail, Name: "Neighbor", PasswordHash: string(hash), Role: domain.RoleBuyer},
+		{ID: uuid.New(), Email: demoEmail, Name: "Demo NoPass", PasswordHash: "", Role: domain.RoleBuyer},
+	} {
+		if createErr := repo.Create(t.Context(), u); createErr != nil {
+			t.Fatalf("seed user %s: %v", u.Email, createErr)
+		}
+	}
+
+	limiter := newMemoryStatefulRateLimiter()
+	svc := service.NewAuthService(repo, "jwt-secret").WithLoginRateLimiter(limiter, 50)
+
+	attackerCtx := captureClientIPContext(t, "198.51.100.9:1111")
+	legitOtherIPCtx := captureClientIPContext(t, "203.0.113.42:2222")
+
+	// 5 wrong passwords from attacker IP lock out (attackerIP, targetEmail) only.
+	for i := range 5 {
+		_, wrongErr := svc.Login(attackerCtx, targetEmail, "wrong-password")
+		de, ok := errors.AsType[*domain.DomainError](wrongErr)
+		if !ok || de.Code != domain.ErrCodeInvalidCredentials {
+			t.Fatalf("attacker attempt %d got %v, want INVALID_CREDENTIALS", i+1, wrongErr)
+		}
+	}
+	_, attackerBlockedErr := svc.Login(attackerCtx, targetEmail, "correct-pass")
+	deBlocked, okBlocked := errors.AsType[*domain.DomainError](attackerBlockedErr)
+	if !okBlocked || deBlocked.Code != domain.ErrCodeRateLimited || deBlocked.HTTPStatus != http.StatusTooManyRequests {
+		t.Fatalf("expected attacker IP to be 429 RATE_LIMITED, got %v", attackerBlockedErr)
+	}
+
+	// Legitimate organizer on a different IP is NOT globally locked out.
+	orgRes, orgErr := svc.Login(legitOtherIPCtx, targetEmail, "correct-pass")
+	if orgErr != nil || orgRes == nil || orgRes.AccessToken == "" {
+		t.Fatalf("expected legitimate organizer from another IP to succeed, got res=%v err=%v", orgRes, orgErr)
+	}
+
+	// Neighbor with a different email on the exact same IP as the locked target STILL succeeds cleanly.
+	neighborRes, neighborErr := svc.Login(attackerCtx, neighborEmail, "correct-pass")
+	if neighborErr != nil || neighborRes == nil || neighborRes.AccessToken == "" {
+		t.Fatalf("expected neighbor on same IP with distinct email to succeed, got res=%v err=%v", neighborRes, neighborErr)
+	}
+
+	// Missing email and empty-passwordHash demo user both perform cost-10 dummy bcrypt parity work
+	// and fall back to "unknown" when context lacks client IP.
+	noIPCtx := t.Context()
+	for _, tc := range []struct {
+		name  string
+		email string
+	}{
+		{name: "missing_email", email: "does-not-exist@event.local"},
+		{name: "empty_password_hash", email: demoEmail},
+	} {
+		start := time.Now()
+		_, loginErr := svc.Login(noIPCtx, tc.email, "any-password")
+		elapsed := time.Since(start)
+		de, ok := errors.AsType[*domain.DomainError](loginErr)
+		if !ok || de.Code != domain.ErrCodeInvalidCredentials {
+			t.Fatalf("%s: got %v, want INVALID_CREDENTIALS", tc.name, loginErr)
+		}
+		if elapsed < 5*time.Millisecond {
+			t.Fatalf("%s: expected cost-10 dummy bcrypt parity latency (>=5ms), got %v", tc.name, elapsed)
+		}
+		unknownFailKey := "rl:login:fail:unknown:" + emailHashForTest(tc.email)
+		if limiter.counts[unknownFailKey] != 1 {
+			t.Fatalf("%s: fail counter[%q] = %d, want 1", tc.name, unknownFailKey, limiter.counts[unknownFailKey])
+		}
 	}
 }
 

@@ -20,7 +20,6 @@ import { resolvePostAuthRedirect } from "@/lib/auth-guards";
 import { solvePowChallenge } from "@/lib/pow";
 import { useAuthStore, type UserRole } from "@/store/auth-store";
 
-const MAX_POW_ATTEMPTS = 1;
 const POW_CHALLENGE_HEADER = "X-PoW-Challenge";
 const POW_SOLUTION_HEADER = "X-PoW-Solution";
 
@@ -60,27 +59,23 @@ export async function executeAuthWithPowRetry<TData, TError>(
     throw firstError;
   }
 
-  for (let attempt = 0; attempt < MAX_POW_ATTEMPTS; attempt++) {
-    let solution: string;
-    try {
-      solution = await solvePowChallenge(challengeToken);
-    } catch (solveErr) {
-      if (firstError && typeof firstError === "object" && solveErr instanceof Error) {
-        throw { ...firstError, detail: solveErr.message };
-      }
-      throw firstError;
+  let solution: string;
+  try {
+    solution = await solvePowChallenge(challengeToken);
+  } catch (solveErr) {
+    if (firstError && typeof firstError === "object" && solveErr instanceof Error) {
+      throw { ...firstError, detail: solveErr.message };
     }
-
-    const retryResult = await callAuth({
-      [POW_SOLUTION_HEADER]: solution,
-    });
-    if (retryResult.error === undefined && retryResult.data !== undefined) {
-      return retryResult.data;
-    }
-    throw retryResult.error;
+    throw firstError;
   }
 
-  throw firstError;
+  const retryResult = await callAuth({
+    [POW_SOLUTION_HEADER]: solution,
+  });
+  if (retryResult.error === undefined && retryResult.data !== undefined) {
+    return retryResult.data;
+  }
+  throw retryResult.error;
 }
 
 const loginSchema = z.object({

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeAuthWithPowRetry } from "@/hooks/useAuthForms";
+import { parseApiError } from "@/lib/api/errors";
 import { solvePowChallenge } from "@/lib/pow";
 
 function countLeadingZeroBits(bytes: Uint8Array): number {
@@ -69,6 +70,22 @@ describe("solvePowChallenge", () => {
     await expect(solvePowChallenge("v1.1893456000.-1.aa.bb")).rejects.toThrow(/difficulty/i);
     await expect(solvePowChallenge("v1.1893456000.25.aa.bb")).rejects.toThrow(/difficulty/i);
     await expect(solvePowChallenge("v1.1893456000.abc.aa.bb")).rejects.toThrow(/difficulty/i);
+  });
+
+  it("rejects when MAX_ITERATIONS is exhausted without matching digest", async () => {
+    const nonZeroDigest = new Uint8Array(32).fill(0xff).buffer;
+    vi.stubGlobal("crypto", {
+      subtle: {
+        digest: async () => nonZeroDigest,
+      },
+    });
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((cb: () => void) => {
+      cb();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    const token = "v1.1893456000.8.00112233445566778899aabbccddeeff.fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    await expect(solvePowChallenge(token)).rejects.toThrow(/max iterations/i);
   });
 });
 
@@ -142,5 +159,33 @@ describe("executeAuthWithPowRetry", () => {
 
     await expect(executeAuthWithPowRetry(callMissingHeader)).rejects.toEqual(missingHeaderErr);
     expect(callMissingHeader).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves CHALLENGE_REQUIRED and surfaces solver error detail when solvePowChallenge rejects", async () => {
+    vi.stubGlobal("crypto", {});
+
+    const token = "v1.1893456000.8.00112233445566778899aabbccddeeff.fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    const callAuth = vi.fn().mockResolvedValueOnce({
+      data: undefined,
+      error: { status: 403, title: "Forbidden", error_code: "CHALLENGE_REQUIRED", detail: "proof-of-work verification required" },
+      response: new Response(null, {
+        status: 403,
+        headers: { "X-PoW-Challenge": token },
+      }),
+    });
+
+    let caught: unknown;
+    try {
+      await executeAuthWithPowRetry(callAuth);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(callAuth).toHaveBeenCalledTimes(1);
+    const parsed = parseApiError(caught);
+    expect(parsed.status).toBe(403);
+    expect(parsed.code).toBe("CHALLENGE_REQUIRED");
+    expect(parsed.userMessage).toMatch(/crypto\.subtle/i);
+    expect(parsed.actionHint).toBe("Use HTTPS or a supported browser with Web Crypto enabled, then submit again.");
   });
 });

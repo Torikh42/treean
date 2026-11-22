@@ -88,7 +88,7 @@ Full trade-offs are documented in [`DECISIONS.md`](DECISIONS.md) (`ADR-001` thro
    - **Solution:**
      - **Checkout (`POST /api/v1/orders`) & Cancel:** Rate-limited per authenticated `user_id` (`20 req/min`) with `RATE_LIMIT_ORDER_IP_MAX=0` by default (per-IP ceiling disabled so CG-NAT buyers never block one another; an optional positive IP cap remains configurable).
      - **Registration (`POST /api/v1/auth/register`):** Soft IP threshold (`5 req/15m`) switches to self-hosted stateless HMAC-SHA-256 Proof-of-Work (`403 CHALLENGE_REQUIRED` with `X-PoW-Challenge` / `X-PoW-Solution`, difficulty `16`, single-use replay guard in Redis), up to a hard IP ceiling (`100 req/15m`, `429 RATE_LIMITED`). The frontend solves challenges transparently via Web Crypto (`crypto.subtle.digest`) and retries once automatically.
-     - **Login (`POST /api/v1/auth/login`):** Pre-`bcrypt` account guard keyed by normalized email SHA-256 hash (`10 req/min` total attempts + `5` failed attempts / `15m` lockout reset on success, `migadu/alps`-inspired) plus adaptive per-IP PoW (`60 req/min` soft threshold, `600 req/min` hard IP ceiling) and Nginx edge protection (`250 req/s`, `burst=1000 nodelay`).
+     - **Login (`POST /api/v1/auth/login`):** Pre-`bcrypt` account guard keyed by normalized email SHA-256 hash (`10 req/min` total attempts) plus per-IP+email failed-attempt lockout (`5` failed attempts / `15m` reset on success, `migadu/alps`-inspired), adaptive per-IP PoW (`60 req/min` soft threshold, `600 req/min` hard IP ceiling), and Nginx edge protection (`250 req/s`, `burst=1000 nodelay`).
      - **Event Catalog Cache:** `GET /api/v1/events` and `GET /api/v1/events/{id}` cache responses in Redis for `3s` (`EVENT_CACHE_TTL`) and invalidate immediately whenever an event, order, payment webhook, or expiry sweep changes quota.
 
 ---
@@ -204,15 +204,15 @@ make down
 | `EVENT_CACHE_TTL` | No | `3s` | `3s` | Redis TTL for public `GET /api/v1/events` and `GET /api/v1/events/{id}` cache |
 | `RATE_LIMIT_ENABLED` | No | `true` | `true` | Enables Redis rate limiting when `REDIS_URL` is configured |
 | `RATE_LIMIT_REGISTER_MAX` | No | `5` | `5` | Soft `POST /api/v1/auth/register` threshold per IP per `15 minutes` before PoW challenge |
-| `RATE_LIMIT_REGISTER_HARD_MAX` | No | `100` | `100` (default) | Hard `POST /api/v1/auth/register` ceiling per IP per `15 minutes` (`429 RATE_LIMITED`) |
-| `RATE_LIMIT_LOGIN_MAX` | No | `10` | `10` | Max `POST /api/v1/auth/login` attempts per email hash per `1 minute` (plus `5` failed / `15m` lockout) |
+| `RATE_LIMIT_REGISTER_HARD_MAX` | No | `100` | `100` | Hard `POST /api/v1/auth/register` ceiling per IP per `15 minutes` (`429 RATE_LIMITED`) |
+| `RATE_LIMIT_LOGIN_MAX` | No | `10` | `10` | Max `POST /api/v1/auth/login` attempts per email hash per `1 minute` (plus `5` failed per `ip:email` / `15m` lockout) |
 | `RATE_LIMIT_LOGIN_IP_MAX` | No | `60` | `60` | Soft `POST /api/v1/auth/login` threshold per IP per `1 minute` before PoW challenge |
-| `RATE_LIMIT_LOGIN_IP_HARD_MAX` | No | `600` | `600` (default) | Hard `POST /api/v1/auth/login` ceiling per IP per `1 minute` (`429 RATE_LIMITED`) |
+| `RATE_LIMIT_LOGIN_IP_HARD_MAX` | No | `600` | `600` | Hard `POST /api/v1/auth/login` ceiling per IP per `1 minute` (`429 RATE_LIMITED`) |
 | `RATE_LIMIT_ORDER_USER_MAX` | No | `20` | `20` | Max order create/cancel requests per authenticated `user_id` per `1 minute` |
-| `RATE_LIMIT_ORDER_IP_MAX` | No | `0` | `300` | Optional order create/cancel ceiling per IP per `1 minute` (`0` disables IP limit for CG-NAT safety) |
+| `RATE_LIMIT_ORDER_IP_MAX` | No | `0` | `0` | Optional order create/cancel ceiling per IP per `1 minute` (`0` disables IP limit for CG-NAT safety) |
 | `RATE_LIMIT_DEMO_FLASH_SALE_MAX` | No | `5` | `5` | Max `POST /api/v1/demo/flash-sale` runs per IP per `1 minute` |
-| `POW_DIFFICULTY` | No | `16` | `16` (default) | Required leading zero bits (`8..24`) for self-hosted SHA-256 PoW challenges |
-| `POW_SECRET` | No | `JWT_SECRET` | `JWT_SECRET` (fallback) | Optional HMAC-SHA-256 signing key for `X-PoW-Challenge` tokens; defaults to `JWT_SECRET` when blank |
+| `POW_DIFFICULTY` | No | `16` | `16` | Required leading zero bits (`8..24`) for self-hosted SHA-256 PoW challenges |
+| `POW_SECRET` | No | `JWT_SECRET` | `""` (`JWT_SECRET` fallback) | Optional HMAC-SHA-256 signing key for `X-PoW-Challenge` tokens; defaults to `JWT_SECRET` when blank |
 | `JWT_SECRET` | Yes | - | `dev-jwt-secret-change-in-production` | HS256 secret used to sign and verify Bearer JWT tokens |
 | `WEBHOOK_SECRET` | Yes | - | `dev-webhook-secret-change-in-production` | Shared secret for SHA-512 payment webhook verification (fails closed if blank) |
 | `ALLOW_DEMO_HEADER_AUTH` | No | `false` | `true` | Allows `X-User-ID` and `X-User-Role` demo headers for local concurrency tests |

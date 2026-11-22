@@ -16,6 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/torikh42/treean/internal/domain"
+	"github.com/torikh42/treean/internal/middleware"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -31,9 +32,21 @@ const (
 	loginFailWindow        = 15 * time.Minute
 	loginAcctKeyPrefix     = "rl:login:acct:"
 	loginFailKeyPrefix     = "rl:login:fail:"
+	unknownLoginClientIP   = "unknown"
 	errMsgInvalidCreds     = "invalid email or password"
 	errMsgInvalidAuth      = "invalid or expired token"
 )
+
+var dummyBcryptHash = mustDummyBcryptHash()
+
+func mustDummyBcryptHash() []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte("dummy-timing-parity-password"), bcryptCost)
+	if err != nil {
+		// Static valid cost-10 fallback if random entropy is unavailable at init.
+		return []byte("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy")
+	}
+	return hash
+}
 
 // AuthService manages registration, login, and JWT issuance/verification.
 type AuthService struct {
@@ -132,12 +145,18 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthR
 	u, err := s.users.FindByEmail(ctx, normalizedEmail)
 	if err != nil {
 		if de, ok := errors.AsType[*domain.DomainError](err); ok && de.Code == domain.ErrCodeInvalidCredentials {
+			_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
 			s.recordFailedLogin(ctx, emailHash)
 			return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeInvalidCredentials, errMsgInvalidCreds)
 		}
 		return nil, err
 	}
-	if u == nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+	if u == nil || u.PasswordHash == "" {
+		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
+		s.recordFailedLogin(ctx, emailHash)
+		return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeInvalidCredentials, errMsgInvalidCreds)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
 		s.recordFailedLogin(ctx, emailHash)
 		return nil, domain.NewDomainError(http.StatusUnauthorized, domain.ErrCodeInvalidCredentials, errMsgInvalidCreds)
 	}
@@ -211,12 +230,20 @@ func loginEmailHash(normalizedEmail string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+func loginFailKey(ctx context.Context, emailHash string) string {
+	ip := strings.TrimSpace(middleware.ClientIPFromContext(ctx))
+	if ip == "" {
+		ip = unknownLoginClientIP
+	}
+	return loginFailKeyPrefix + ip + ":" + emailHash
+}
+
 func (s *AuthService) enforceLoginRateLimit(ctx context.Context, emailHash string) error {
 	if s.limiter == nil {
 		return nil
 	}
 	if peeker, ok := s.limiter.(RateLimitPeeker); ok {
-		allowed, retryAfter, err := peeker.Peek(ctx, loginFailKeyPrefix+emailHash, loginFailMax)
+		allowed, retryAfter, err := peeker.Peek(ctx, loginFailKey(ctx, emailHash), loginFailMax)
 		if err == nil && !allowed {
 			return domain.NewRateLimitedError("too many failed login attempts; please wait and try again").WithRetryAfter(retryAfter)
 		}
@@ -239,14 +266,14 @@ func (s *AuthService) recordFailedLogin(ctx context.Context, emailHash string) {
 	if s.limiter == nil {
 		return
 	}
-	if _, _, err := s.limiter.Allow(ctx, loginFailKeyPrefix+emailHash, loginFailMax, loginFailWindow); err != nil {
+	if _, _, err := s.limiter.Allow(ctx, loginFailKey(ctx, emailHash), loginFailMax, loginFailWindow); err != nil {
 		return
 	}
 }
 
 func (s *AuthService) resetFailedLogin(ctx context.Context, emailHash string) {
 	if resetter, ok := s.limiter.(RateLimitResetter); ok {
-		if err := resetter.Reset(ctx, loginFailKeyPrefix+emailHash); err != nil {
+		if err := resetter.Reset(ctx, loginFailKey(ctx, emailHash)); err != nil {
 			return
 		}
 	}
