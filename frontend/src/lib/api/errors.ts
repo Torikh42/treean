@@ -49,6 +49,14 @@ function buildDynamicCopy(
   rawDetail: string,
   fieldMessages: ReadonlyArray<string>,
 ): ErrorCopy | null {
+  if (code === "CHALLENGE_REQUIRED") {
+    return {
+      userTitle: "Verification required",
+      userMessage: "Shared network verification timed out or could not be completed automatically.",
+      actionHint: "Please submit the form again to try again.",
+    };
+  }
+
   if (code === "BUYER_LIMIT_EXCEEDED") {
     const match = BUYER_LIMIT_RE.exec(rawDetail);
     if (match) {

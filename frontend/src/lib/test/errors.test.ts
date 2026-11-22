@@ -116,4 +116,18 @@ describe("parseApiError", () => {
     expect(parsed.code).toBe("RATE_LIMITED");
     expect(parsed.actionHint).toContain("wait");
   });
+
+  it("maps CHALLENGE_REQUIRED (403) with verification guidance", () => {
+    const parsed = parseApiError({
+      title: "Forbidden",
+      status: 403,
+      detail: "proof-of-work verification required for shared network",
+      error_code: "CHALLENGE_REQUIRED",
+    });
+    expect(parsed.status).toBe(403);
+    expect(parsed.code).toBe("CHALLENGE_REQUIRED");
+    expect(parsed.userTitle).toBe("Verification required");
+    expect(parsed.userMessage).toContain("Shared network verification timed out");
+    expect(parsed.actionHint.toLowerCase()).toContain("try again");
+  });
 });
