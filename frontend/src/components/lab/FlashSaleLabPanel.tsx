@@ -35,7 +35,7 @@ export function FlashSaleLabPanel({
           200-Concurrent Flash Sale Benchmark
         </h2>
         <p className="mt-1 text-sm text-ink-muted">
-          Calls POST /api/v1/demo/flash-sale, spinning parallel buyer goroutines simultaneously against PostgreSQL row locks.
+          Calls POST /api/v1/demo/flash-sale, seeding a synthetic stress event (Reguler set to the quota below, VIP fixed at 10) and running parallel buyers against the Reguler tier under PostgreSQL row locks.
         </p>
       </div>
 
@@ -52,7 +52,7 @@ export function FlashSaleLabPanel({
           />
         </label>
         <label className="block text-xs font-bold uppercase">
-          Initial Tier Quota (1-500)
+          Reguler Initial Quota (1-500)
           <input
             type="number"
             min={1}
@@ -97,13 +97,13 @@ export function FlashSaleLabPanel({
               <p className="text-xl font-bold text-status-wait-ink">{report.rejected_quota_empty}</p>
             </div>
             <div className="border-2 border-ink bg-signal p-3">
-              <p className="text-xs">Remaining After</p>
+              <p className="text-xs">Reguler Remaining</p>
               <p className="text-xl font-bold">{report.remaining_quota_after}</p>
             </div>
           </div>
 
           <p className="mt-3 break-all font-mono text-xs text-ink-muted">
-            Event ID: {report.event_id} | Zero Oversell: {String(report.zero_oversell)} | Other Failures: {report.rejected_other}
+            Event ID: {report.event_id} | Tested Tier: Reguler ({report.ticket_type_id}) | VIP Untouched: 10 | Zero Oversell: {String(report.zero_oversell)} | Other Failures: {report.rejected_other}
           </p>
         </div>
       )}
