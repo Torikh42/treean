@@ -85,3 +85,17 @@ func (c *Client) withTimeout(ctx context.Context) (context.Context, context.Canc
 	}
 	return context.WithTimeout(ctx, c.timeout)
 }
+
+func (c *Client) logDegraded(ctx context.Context, msg, key string, err error) {
+	if c == nil || c.logger == nil {
+		return
+	}
+	attrs := make([]any, 0, 2)
+	if key != "" {
+		attrs = append(attrs, slog.String("key", key))
+	}
+	if err != nil {
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+	c.logger.WarnContext(ctx, msg, attrs...)
+}
